@@ -1,102 +1,47 @@
 # CHun
 
-CHun 是面向长期维护的 Pwn 框架骨架，采用 `src/` layout、`pyproject.toml` 主配置、统一状态中心（`PwnRegistry`）和门面工具类（`MyTool`/`Tool`）。
+CHun: a lightweight and evolving Pwn toolkit by Chenhun.
 
-## 命名与导入口径
+CHun 是一个面向长期维护的 Python Pwn 工具库，围绕 `Tool`、`Reg`、`Blind` 提供可组合的 Pwn 工作流，并保留 `my_tools.py` 的历史兼容入口。
 
-- 仓库名：`CHun`
-- Python 包名：`chun`
-- 推荐导入：
+## 核心特性
 
-```python
-from chun import Tool, Blind, Reg
-```
-
-## 目录结构
-
-```text
-CHun/
-├── pyproject.toml
-├── setup.py
-├── my_tools.py
-├── src/
-│   └── chun/
-│       ├── __init__.py
-│       ├── _compat.py
-│       ├── cli.py
-│       ├── core/
-│       │   ├── __init__.py
-│       │   ├── tool.py
-│       │   ├── registry.py
-│       │   └── target.py
-│       ├── plugins/
-│       │   ├── __init__.py
-│       │   ├── blind.py
-│       │   ├── fmt.py
-│       │   └── heap.py
-│       ├── utils/
-│       │   ├── __init__.py
-│       │   ├── display.py
-│       │   └── misc.py
-│       └── templates/
-│           ├── exp.py.tpl
-│           └── blind_fmt.py.tpl
-├── tests/
-│   ├── test_blind.py
-│   ├── test_registry.py
-│   ├── test_target.py
-│   └── test_tool.py
-└── docs/
-    ├── design.md
-    └── migration.md
-```
+- 门面入口：`Tool`/`MyTool`/`CHun` 统一启动与状态操作
+- 统一情报中心：`PwnRegistry`（别名 `Reg`）集中管理地址/base/misc
+- Blind FMT 探测：`Blind` 支持自动重连、扫栈、offset 定位与回写
+- 渐进迁移：兼容 `add_log()` 与旧脚本导入方式
 
 ## 安装
 
 ```bash
-pip install -e .
+python -m pip install -e .
 ```
 
-## 快速使用
+## 最小使用示例
 
 ```python
-from chun import Tool
-
-p = Tool("./challenge", remote_mode=False)
-io = p.start()
-
-p.add_log("puts@libc", 0x7ffff7a5f5e0)
-p.derive_base("puts@libc", p.libc.sym["puts"], base_name="libc")
-p.show()
-```
-
-## Blind 模式
-
-```python
-from chun import Tool
-
-
-def io_factory():
-    return ...
-
-
-def interact(io, payload: bytes) -> bytes | None:
-    io.sendline(payload)
-    return io.recvline(timeout=1)
-
+from chun import Tool, Blind, Reg
 
 p = Tool("./challenge")
-blind = p.new_blind_tool(io_factory=io_factory, interact_func=interact)
-blind.dump_stack_ptrs(1, 40)
+io = p.start()
+
+p.add_log("puts@libc", 0x7F1234580000)
+candidate = p.derive_base("puts@libc", p.libc.sym["puts"], base_name="libc")
+print(hex(candidate.aligned_base), candidate.score)
 p.show()
 ```
 
-## 兼容说明
+## 文档入口
 
-历史脚本可继续使用：
+- 文档首页：[`docs/index.md`](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/index.md)
+- MkDocs 配置：[`mkdocs.yml`](/Users/zaochuan/Documents/code/python/CHun_pwn/mkdocs.yml)
+- API 总览：[`docs/api/index.md`](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/index.md)
 
-```python
-from my_tools import MyTool, BlindFmtTool
-```
+文档主维护位置在 `docs/`，README 只保留项目入口、安装与最小示例。
 
-其中 `UnifiedPwn` 在兼容层里映射到 `Tool`。
+## 当前模块概览
+
+- `src/chun/core`：`tool.py`、`registry.py`、`target.py`
+- `src/chun/plugins`：`blind.py`、`fmt.py`、`heap.py`
+- `src/chun/utils`：`display.py`、`misc.py`
+- `my_tools.py`：历史兼容导入壳
