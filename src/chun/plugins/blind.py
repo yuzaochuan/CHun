@@ -50,6 +50,16 @@ class BlindFmtTool:
 
         self._ensure_connection()
 
+    @property
+    def offest(self) -> int:
+        """兼容历史拼写错误 `offest`，统一映射到 `offset`。"""
+        return self.offset
+
+    @offest.setter
+    def offest(self, value: int) -> None:
+        """兼容历史拼写错误 `offest`，统一映射到 `offset`。"""
+        self.offset = value
+
     def _ensure_connection(self) -> TubeLike:
         """确保当前存在可用连接；断开时自动重建。"""
         if self.current_io is None:
