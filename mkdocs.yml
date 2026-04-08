@@ -1,8 +1,9 @@
 site_name: CHun
 site_description: CHun Pwn toolkit documentation
-site_url: ""
-repo_name: CHun
-repo_url: ""
+site_url: https://yuzaochuan.github.io/CHun/
+repo_name: yuzaochuan/CHun
+repo_url: https://github.com/yuzaochuan/CHun
+
 docs_dir: docs
 site_dir: site
 
