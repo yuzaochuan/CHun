@@ -1,12 +1,12 @@
 # 设计说明（历史入口）
 
-此页面已并入新文档体系，请改读：
+此页面已并入新文档体系，请改读当前第一阶段架构文档。旧 `Tool / my_tools.py` 入口已经不再是主设计方向。
 
-1. 单一职责：`core / plugins / utils` 分层，避免功能互相污染
-2. 状态收口：泄漏和推导结果统一进入 `PwnRegistry`
-3. API 稳定：通过 `Tool`（`MyTool` 别名）统一入口
-4. 渐进迁移：保留 `my_tools.py` 兼容层，降低旧脚本迁移风险
-5. 复杂度分层：默认暴露“推荐接口”，高级机制按需下潜
+1. 单一职责：`core / transports / plugins / utils` 分层，避免功能互相污染
+2. 连接收口：通过 `TargetSpec + TransportSpec + Transport` 统一表达连接方式
+3. 入口收口：通过 `CHun` / `CHunSession` 统一进入 runtime
+4. 状态中心：`PwnRegistry` 继续独立保留，后续再重新接回 session
+5. 复杂度分层：当前阶段先稳住 transport，后续系统按层推进
 
 ## 2.5 使用分层
 

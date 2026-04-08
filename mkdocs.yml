@@ -1,8 +1,9 @@
 site_name: CHun
 site_description: CHun Pwn toolkit documentation
-site_url: ""
-repo_name: CHun
-repo_url: ""
+site_url: https://yuzaochuan.github.io/CHun/
+repo_name: yuzaochuan/CHun
+repo_url: https://github.com/yuzaochuan/CHun
+
 docs_dir: docs
 site_dir: site
 
@@ -24,7 +25,8 @@ nav:
   - 从 my_tools 迁移: migration-from-my-tools.md
   - API:
       - 总览: api/index.md
-      - Tool: api/tool.md
+      - Session: api/tool.md
+      - Transport: api/transport.md
       - Registry: api/registry.md
       - Blind: api/blind.md
       - Models: api/models.md

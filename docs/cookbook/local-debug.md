@@ -7,20 +7,16 @@
 ## 基本流程
 
 ```python
-from chun import Tool
+from chun import CHun
 
-p = Tool("./challenge", remote_mode=False)
-io = p.start()
+p = CHun.process("./challenge")
+io = p.io.raw
 
-# 可选：命令行带 GDB 时 attach
-p.gdb(io, gdbscript="b *main\nc")
-
-# 记录泄漏
-p.add_log("puts@libc", 0x7F1234580000)
-p.show()
+io.sendline(b"1")
+print(io.recvuntil(b"\n"))
 ```
 
 ## 建议
 
-- 调试阶段把关键地址写入 `add_log()`，避免信息只存在终端滚屏
-- 先让 Registry 数据完整，再进入自动推导和 payload 收敛
+- 这一阶段先把本地进程运行时迁移到 `CHun.process()`
+- 调试器桥接尚未进入第一阶段实现，后续再单独落地

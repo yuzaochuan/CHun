@@ -7,20 +7,16 @@
 ## 上下文组织建议
 
 ```python
-from chun import Tool
+from chun import CHun
 
-p = Tool("./challenge", host="example.com", port=31337, remote_mode=True)
-io = p.start()
+p = CHun.remote("example.com", 31337, binary="./challenge")
+io = p.io
 
-# 记录远程上下文（非地址信息）
-p.add_log(remote_target="example.com:31337", phase="warmup")
-
-# 记录地址类情报
-p.add_log("puts@libc", 0x7F1234580000)
-p.show()
+io.sendline(b"hello")
+print(io.recvuntil(b"\n"))
 ```
 
-## 非地址信息记录方式
+## 建议
 
-- 非 `int` 值（如 `phase`、`remote_target`）会进入 `misc`
-- 地址值进入 typed record，可继续用于分类与 base 推导
+- 远程连接不再通过 `remote_mode=True` 选择，而是直接使用 `CHun.remote()`
+- 如果目标经常断线，优先考虑把交互切到 `CHun.blind()` 的一次性连接模型

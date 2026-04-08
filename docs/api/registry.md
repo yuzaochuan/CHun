@@ -101,9 +101,9 @@ Infer 展示层默认分为三层：
 
 对应关系：
 
-- `Tool.show(verbose=...)` / `Tool.puts_log(verbose=...)` -> 快照视图
-- `Tool.show_snapshot(verbose=...)` -> 显式快照视图
-- `Tool.show_last_infer(verbose=...)` -> infer 分层视图
+- `PwnRegistry.puts_log(verbose=...)` -> 快照视图
+- `PwnRegistry.show_snapshot(verbose=...)` -> 显式快照视图
+- `PwnRegistry.show_last_infer(verbose=...)` -> infer 分层视图
 
 ## `kind / source / confidence / notes / meta` 含义
 

@@ -18,7 +18,7 @@
 
 ## 示例代码风格
 
-- 优先使用 `from chun import Tool, Blind, Reg`
+- 优先使用 `from chun import CHun`
 - 示例要可运行或接近可运行，避免伪代码堆砌
 - 对 Future work 明确标注，不伪装为已实现
 

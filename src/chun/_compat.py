@@ -21,7 +21,7 @@ def _runtime_error(name: str) -> RuntimeError:
 
 
 try:
-    from pwn import ELF, args, context, gdb, log, pause, process, remote  # type: ignore
+    from pwn import ELF, args, context, gdb, log, pause, process, remote, ssh  # type: ignore
 except Exception:  # pragma: no cover
 
     class _Args:
@@ -82,6 +82,7 @@ except Exception:  # pragma: no cover
     pause = _missing
     process = _missing
     remote = _missing
+    ssh = _missing
 
 
 __all__ = [
@@ -93,4 +94,5 @@ __all__ = [
     "pause",
     "process",
     "remote",
+    "ssh",
 ]

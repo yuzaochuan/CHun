@@ -12,7 +12,9 @@ authors = [
   { name = "CHun contributors" }
 ]
 dependencies = [
-  "pwntools>=4.12"
+  "httpx>=0.27",
+  "pwntools>=4.12",
+  "websockets>=12.0"
 ]
 
 [project.optional-dependencies]

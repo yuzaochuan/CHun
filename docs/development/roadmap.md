@@ -3,7 +3,7 @@
 ## 近期
 
 - Registry 稳定化：补全记录语义与推导可解释性
-- Blind/Tool 联动：增强 blind 结果回流后的消费路径
+- Blind/session 联动：在新的 transport runtime 上重新接回 blind 结果消费路径
 - Snapshot/UI 美化：优化 `puts_log()` 的可读性与分组展示
 
 ## 中期

@@ -7,16 +7,19 @@
 ## 示例
 
 ```python
-from chun import Tool
+from chun.core.registry import PwnRegistry
 
-p = Tool("./challenge")
+reg = PwnRegistry()
 
 puts_leak = 0x7F1234580000
 puts_offset = 0x080000
 
-# 推荐写法：高频流程走 api
-p.api.record_libc_symbol("puts", puts_leak)
-candidate = p.api.infer_libc_base_from("puts")
+reg.add_log("puts@libc", puts_leak)
+candidate = reg.infer_base(
+    leak_name="puts@libc",
+    symbol_offset=puts_offset,
+    base_name="libc",
+)
 
 print(hex(candidate.raw_base))
 print(hex(candidate.aligned_base))
@@ -28,15 +31,13 @@ print(candidate.reasons)
 如果只想看全量状态快照，改用：
 
 ```python
-p.show_snapshot()  # 保留的全量 snapshot 视图
+reg.show_snapshot()
 ```
 
 如果要看调试展开（含 raw/aligned/分项评分）：
 
 ```python
-p.api.infer_libc_base_from("puts", verbose=True)
-# 或
-p.show_last_infer(verbose=True)
+reg.show_last_infer(verbose=True)
 ```
 
 Infer 输出分层：
