@@ -12,11 +12,17 @@
 
 详见：[Transport API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/transport.md)
 
-## `Reg` / `PwnRegistry`
+## `EvidenceRegistry`
 
-职责：统一情报中心，管理地址记录、base 记录、misc 数据，并提供推导与分类能力。当前阶段它仍可独立使用，但尚未完整接回新的 `CHunSession`。
+职责：统一事实层，管理 observation / fact / artifact / context，并已正式挂接到 `CHunSession`。
 
 详见：[Registry API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/registry.md)
+
+## Debug / Resolve
+
+职责：提供 `session.dbg`、`session.gdb_mi`、`session.resolve`、`session.crash`，打通 GDB、DynELF、core dump 三条关键 workflow。
+
+详见：[Debug & Resolve API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/debug.md)
 
 ## Blind Reconnect
 

@@ -2,15 +2,16 @@
 
 CHun: a lightweight and evolving Pwn toolkit by Chenhun.
 
-CHun 当前已进入第一阶段架构重构：顶层入口切到 `CHun` / `CHunSession`，运行时以 `TargetSpec + TransportSpec + Transport` 为地基，为后续扩展打 Transport 层基础。
+CHun 当前已进入第三轮重构：在前两轮的 transport + registry/session 地基之上，正式接入了 pwntools / GDB bridge、DynELF 解析链路和 core dump 分析入口。
 
 ## 核心特性
 
 - 会话入口：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()`
 - Web 方向 transport：`CHun.http()` / `CHun.websocket()`
 - Blind transport：`CHun.blind()` + `BlindReconnectTransport`
-- 第一阶段主力 transport：`PwntoolsTubeTransport` / `HttpxTransport` / `WebSocketTransport`
-- `PwnRegistry` 仍保留为独立状态中心，后续阶段再接回完整 session
+- 会话内统一事实层：`session.registry` / `session.rec`
+- 最小 inference 入口：`session.infer`
+- 调试与解析入口：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
 
 ## 安装
 
@@ -24,8 +25,9 @@ python -m pip install -e .
 from chun import CHun
 
 p = CHun.process("./challenge")
-p.io.sendline(b"1")
-print(p.io.recvuntil(b"\n"))
+p.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+result = p.infer.libc_base_from_symbol_leak("puts", symbol_offset=0x80000)
+print(hex(result.aligned_base))
 ```
 
 ## 多种连接方式
@@ -59,6 +61,36 @@ response = blind.io.exchange(
 print(response)
 ```
 
+## Session + Registry 示例
+
+```python
+from chun import CHun, RecordDomain
+
+session = CHun.process("./challenge")
+session.rec.set_context("libc.path", "/glibc/libc.so.6", domain=RecordDomain.LIBC)
+session.rec.record_artifact("payload.stage1", b"AAAA", tags=["payload"])
+```
+
+## Bridge Workflow 示例
+
+```python
+from chun import CHun
+
+session = CHun.process("./challenge")
+
+# 交互式 GDB attach
+# session.dbg.attach(script="b *main\nc")
+
+# blind leak -> DynELF
+result = session.resolve.symbol_via_dynelf(
+    "system",
+    leak_primitive=lambda addr, size=8: b"\x00" * size,
+    pointer=0x601018,
+    lib="libc",
+)
+print(hex(result.address))
+```
+
 ## 文档入口
 
 - 文档首页：[`docs/index.md`](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/index.md)
@@ -70,9 +102,10 @@ print(response)
 ## 当前模块概览
 
 - `src/chun/facade.py`：`CHun` 顶层工厂入口
-- `src/chun/core`：`session.py`、`models/`、`errors.py`、`registry.py`
+- `src/chun/core`：`session.py`、`models/`、`errors.py`、`registry/`、`inference/`、`resolve/`、`analysis/`
+- `src/chun/bridges`：GDB / pwntools 相关 bridge
 - `src/chun/transports`：transport 实现与组装工厂
 - `src/chun/plugins`：后续 blind/fmt/heap 插件骨架
 - `src/chun/utils`：`display.py`、`misc.py`
 
-当前阶段刻意未做完整 Registry 重构、Inference 新系统、fmt/heap/libc/template 主体实现。
+当前阶段刻意未做 fmt / heap / template 主体，以及 pwngdb / pwndbg 深集成。

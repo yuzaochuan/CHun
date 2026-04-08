@@ -15,11 +15,12 @@ python -m pip install -e .
 ## 最小示例
 
 ```python
-from chun import CHun
+from chun import CHun, RecordDomain
 
 p = CHun.process("./challenge")
-p.io.sendline(b"1")
-print(p.io.recvuntil(b"\n"))
+p.rec.record_symbol_leak("puts", 0x7F1234580000, domain=RecordDomain.LIBC, source="got")
+result = p.infer.libc_base_from_symbol_leak("puts", symbol_offset=0x80000)
+print(hex(result.aligned_base))
 ```
 
 ## 本地 / 远程 / SSH
@@ -68,7 +69,30 @@ result = blind.io.exchange(
 print(result)
 ```
 
+## 调试与解析入口
+
+```python
+from chun import CHun
+
+session = CHun.process("./challenge")
+
+# 交互式 GDB
+# session.dbg.attach(script="b *main\nc")
+
+# GDB/MI
+# mi_result = session.gdb_mi.execute("-gdb-version")
+
+# DynELF
+resolved = session.resolve.symbol_via_dynelf(
+    "system",
+    leak_primitive=lambda addr, size=8: b"\x00" * size,
+    pointer=0x601018,
+    lib="libc",
+)
+print(hex(resolved.address))
+```
+
 ## 当前阶段边界
 
-- 已落地：session 入口、spec 模型、四类 transport
-- 暂未重建：完整 Registry 新架构、Inference 新系统、fmt/heap/template 主体
+- 已落地：session 入口、transport、registry、最小 inference、debug/resolve/crash bridge
+- 暂未实现：fmt/heap/template 主体与 pwngdb/pwndbg 深集成

@@ -1,6 +1,6 @@
 # 架构设计
 
-## 第一阶段目标
+## 第一阶段回顾
 
 第一阶段不再围绕 `Tool(remote_mode=...)` 修修补补，而是先把连接层彻底独立出来。当前实现优先建立四个稳定边界：
 
@@ -36,15 +36,29 @@
 - `src/chun/facade.py`
   - `CHun.process()/remote()/ssh_process()/http()/websocket()/blind()`
 
+## 第二阶段目标
+
+第二阶段把新的事实层正式挂回 `CHunSession`，让后续 fmt / heap / debugger / template 都围绕统一 registry 工作，而不是继续依赖分散记录。
+
+这次落地的核心边界是：
+
+- `observations`：原始观测
+- `facts`：稳定结论
+- `artifacts`：可复用产物
+- `context`：会话环境与背景信息
+
 ## 当前阶段的 session 定位
 
-`CHunSession` 现在只承载 transport 运行时，不提前把后续系统一次性铺满。
+`CHunSession` 现在已经承载 transport、registry 与最小 inference，但仍然不会把后续系统一次性铺满。
 
 当前稳定字段：
 
 - `session.target`
 - `session.transport_spec`
 - `session.transport`
+- `session.registry`
+- `session.rec`
+- `session.infer`
 - `session.io`
 
 未来会继续往 `session.rec / infer / dbg / fmt / heap / tpl` 扩展，但这不在本阶段范围内。
@@ -60,8 +74,35 @@
 
 统一的是边界，不是伪造一套对所有协议都别扭的假接口。
 
-## `PwnRegistry` 的位置
+## Registry 的位置
 
-`PwnRegistry` 仍然保留在 `core/registry.py`，因为它代表的是独立的状态中心，不属于旧 `remote_mode` 架构本身。
+新的 `EvidenceRegistry` 位于 `core/registry/`，并已经正式挂接到 `CHunSession`。
 
-但在这一阶段，它还没有被重新挂回新的 `CHunSession`。这是刻意控制范围，不是遗漏。
+它的职责不是“临时日志箱”，而是未来公共地基：
+
+- transport 可以写入 context
+- session 可以统一访问 observation / fact / artifact / context
+- inference 可以从 observation 读取并写回 fact
+- 后续插件可以稳定依赖这层事实模型
+
+## 第三轮目标
+
+第三轮开始把 pwntools / GDB / Corefile / DynELF 这些 exploit 工作流必需能力正式接入 session。
+
+这次新增的重点边界是：
+
+- `session.dbg`
+  - 交互式 `PwntoolsGdbBridge`
+- `session.gdb_mi`
+  - 机器可解析的 `GdbMiBridge`
+- `session.resolve`
+  - `MemLeak` / `DynELF` / pwntools symbol 解析入口
+- `session.crash`
+  - `CorefileAnalyzer`
+
+## 第三轮的设计原则
+
+- 人类调试入口和机器分析入口分离
+- bridge 产物必须回写 registry
+- ret2libc / blind leak / core dump 三条 workflow 优先打通
+- 不提前展开 fmt / heap / template 主体

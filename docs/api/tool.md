@@ -16,11 +16,18 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 
 ## `CHunSession`
 
-每个工厂方法都会返回一个 `CHunSession`。第一阶段它只承载 transport 相关运行时：
+每个工厂方法都会返回一个 `CHunSession`。第三轮它已经承载 transport、registry、最小 inference，以及调试 / 解析 / crash 分析入口：
 
 - `target`：`TargetSpec`
 - `transport_spec`：`TransportSpec`
 - `transport`：实际 transport 实例
+- `registry`：统一事实层
+- `rec`：`registry` 的短别名
+- `infer`：最小 inference 服务
+- `dbg`：交互式 `PwntoolsGdbBridge`
+- `gdb_mi`：结构化 `GdbMiBridge`
+- `resolve`：`MemLeak` / `DynELF` / pwntools symbol 解析入口
+- `crash`：`CorefileAnalyzer`
 - `io`：延迟打开后的 transport 访问入口
 - `raw`：底层原始连接对象
 
@@ -39,15 +46,22 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - `session.close()`：关闭 transport
 - `session.reconnect()`：重建 transport
 - `session.io`：首次访问时自动打开 transport
+- `session.rec`：记录 observation / fact / artifact / context
+- `session.infer`：执行最小 inference 闭环
+- `session.dbg`：attach / gdbscript / 基本命令
+- `session.gdb_mi`：结构化 GDB/MI 命令
+- `session.resolve`：MemLeak / DynELF / symbol 解析
+- `session.crash`：core dump 分析
 
 ## 示例
 
 ```python
-from chun import CHun
+from chun import CHun, RecordDomain
 
 p = CHun.process("./challenge")
-p.io.sendline(b"1")
-print(p.io.recvuntil(b"\n"))
+p.rec.record_symbol_leak("puts", 0x7F1234580000, domain=RecordDomain.LIBC, source="got")
+result = p.infer.libc_base_from_symbol_leak("puts", symbol_offset=0x80000)
+print(hex(result.aligned_base))
 
 api = CHun.http("http://127.0.0.1:8000")
 print(api.io.request("GET", "/health"))
@@ -55,5 +69,5 @@ print(api.io.request("GET", "/health"))
 
 ## 本阶段边界
 
-- 已完成：session/runtime 入口与 transport 组装
-- 未完成：完整 `session.rec / infer / dbg / fmt / heap / tpl` 子系统
+- 已完成：session/runtime 入口、registry 挂接、最小 inference、debug/resolve/crash bridge
+- 未完成：完整 `fmt / heap / tpl` 子系统，以及 pwngdb/pwndbg 深集成

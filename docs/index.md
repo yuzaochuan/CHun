@@ -2,7 +2,7 @@
 
 ## CHun 是什么
 
-CHun 目前处于源码重构第一阶段。顶层入口已经从旧式 `Tool(remote_mode=...)` 切换为 `CHun` 工厂与 `CHunSession`，底层运行时围绕 `Transport` 独立成层，为后续 Evidence / Inference / Template 能力继续扩展打地基。
+CHun 目前处于源码重构第二阶段。顶层入口已经切到 `CHun` 工厂与 `CHunSession`，并在 transport 运行时之上正式挂接了新的 registry / evidence / 最小 inference 闭环。
 
 ## 适用场景
 
@@ -15,8 +15,8 @@ CHun 目前处于源码重构第一阶段。顶层入口已经从旧式 `Tool(re
 
 - 已实现：`TargetSpec` / `TransportSpec` / `CHunSession`
 - 已实现：`PwntoolsTubeTransport`、`HttpxTransport`、`WebSocketTransport`、`BlindReconnectTransport`
-- 已保留：`PwnRegistry` 作为独立状态中心
-- 刻意未做：完整 Registry 重构、Inference 新系统、fmt/heap/template 主体
+- 已实现：`EvidenceRegistry`、`session.rec`、`session.infer`
+- 刻意未做：fmt/heap/template/debugger bridge 主体
 
 ## 文档导航
 

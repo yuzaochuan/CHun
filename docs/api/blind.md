@@ -1,8 +1,8 @@
 # Blind API
 
-## 第一阶段的 blind 能力
+## blind 入口的当前定位
 
-本阶段对 blind 场景只落地 transport 骨架，不提前实现完整 blind 插件系统。当前公开入口是：
+当前 blind 场景的公开入口仍然是 transport 级骨架：
 
 - `CHun.blind(connection_factory)`
 - `BlindReconnectTransport`
@@ -50,5 +50,5 @@ print(result)
 
 ## 当前边界
 
-- 已完成：blind reconnect transport
-- 未完成：完整 blind 探针编排、批量 `%p/%s` workflow、与 Registry 的正式重新集成
+- 已完成：blind reconnect transport，以及把 leak primitive 接到 `session.resolve` 的 MemLeak / DynELF 解析链路
+- 未完成：完整 blind 探针编排、批量 `%p/%s` workflow

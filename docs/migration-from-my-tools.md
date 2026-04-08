@@ -2,7 +2,7 @@
 
 ## 这次迁移的方向
 
-第一阶段重构不再保留 `my_tools.py` 兼容层，也不再把 `Tool` 作为主入口。迁移目标不是“旧接口原样挪过去”，而是把脚本切到新的 session + transport 入口。
+重构后的主入口不再保留 `my_tools.py` 兼容层，也不再把 `Tool` 作为主入口。迁移目标不是“旧接口原样挪过去”，而是把脚本切到新的 session + transport + registry 入口。
 
 ## 对应关系
 
@@ -60,9 +60,13 @@ response = blind.io.exchange(
 - `remote_mode` 布尔切换
 - 把 blind / local / remote / web 逻辑继续揉在一个类里
 
-## 仍然保留但尚未重新挂回 session 的部分
+## 当前已经挂回 session 的部分
 
-- `PwnRegistry`
-- `infer_base()` 相关推导能力
+- `session.registry`
+- `session.rec`
+- `session.infer`
 
-这些能力仍可独立使用，但完整的新 session 集成属于后续阶段。
+## 后续阶段仍待补齐的部分
+
+- 更完整的推导规则库
+- fmt / heap / template / debugger bridge 的专用子系统
