@@ -22,13 +22,14 @@ def test_ret2libc_workflow_uses_session_registry_inference_and_pwntools_style_sy
     )
     result = session.resolve.libc_base_from_elf_symbol(
         "puts",
-        libc_elf=DummyLibc(sym={"puts": 0x80000}),
+        elf=DummyLibc(sym={"puts": 0x80000}),
         symbol="puts",
     )
 
     fact = session.registry.get_fact("libc.base")
     assert fact is not None
     assert fact.value == expected_base
+    assert result.value == expected_base
     assert result.stored_fact is fact
 
 

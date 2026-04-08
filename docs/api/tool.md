@@ -63,6 +63,7 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - `session.close()`：关闭 transport
 - `session.reconnect()`：重建 transport
 - `session.io`：首次访问时自动打开 transport
+- pwntools 场景下可直接使用 `session.io.sendlineafter()` / `session.io.interactive()`
 - `session.rec`：记录 observation / fact / artifact / context
 - `session.infer`：执行最小 inference 闭环
 - `session.dbg`：attach / gdbscript / 基本命令

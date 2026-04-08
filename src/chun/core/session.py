@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
+from ..transports.base import BaseTransport
 from .analysis import CorefileAnalyzer
 from .inference import InferenceService
 from .models import ContextKind, RecordDomain, TargetSpec, TransportSpec
@@ -29,25 +31,20 @@ class CHunSession:
 
     target: TargetSpec
     transport_spec: TransportSpec
-    transport: object
+    transport: BaseTransport
     registry: EvidenceRegistry = field(default_factory=EvidenceRegistry)
-    infer: InferenceService | None = None
-    dbg: PwntoolsGdbBridge | None = None
-    gdb_mi: GdbMiBridge | None = None
-    resolve: ResolveService | None = None
-    crash: CorefileAnalyzer | None = None
+    infer: InferenceService = field(init=False)
+    dbg: PwntoolsGdbBridge = field(init=False)
+    gdb_mi: GdbMiBridge = field(init=False)
+    resolve: ResolveService = field(init=False)
+    crash: CorefileAnalyzer = field(init=False)
 
     def __post_init__(self) -> None:
-        if self.infer is None:
-            self.infer = InferenceService(self.registry)
-        if self.dbg is None:
-            self.dbg = PwntoolsGdbBridge(self.registry, self.target, lambda: self.raw)
-        if self.gdb_mi is None:
-            self.gdb_mi = GdbMiBridge(self.registry, self.target)
-        if self.resolve is None:
-            self.resolve = ResolveService(self.registry, self.infer)
-        if self.crash is None:
-            self.crash = CorefileAnalyzer(self.registry)
+        self.infer = InferenceService(self.registry)
+        self.dbg = PwntoolsGdbBridge(self.registry, self.target, lambda: self.raw)
+        self.gdb_mi = GdbMiBridge(self.registry, self.target)
+        self.resolve = ResolveService(self.registry, self.infer)
+        self.crash = CorefileAnalyzer(self.registry)
         self._seed_context()
 
     def _seed_context(self) -> None:
@@ -120,7 +117,7 @@ class CHunSession:
         return self.registry
 
     @property
-    def io(self) -> object:
+    def io(self) -> BaseTransport:
         """提供统一 runtime 入口，并在首次访问时延迟打开 transport。"""
         if not self.transport.is_open:
             self.transport.open()
@@ -128,7 +125,7 @@ class CHunSession:
         return self.transport
 
     @property
-    def raw(self) -> object:
+    def raw(self) -> Any:
         """返回底层 transport 的原始对象。"""
         return self.io.raw
 

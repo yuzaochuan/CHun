@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, TypeVar
 
 from ..core.errors import TransportCapabilityError, TransportConfigError
+from ..core.models import TargetSpec, TransportSpec
 from .base import BaseTransport
 
 T = TypeVar("T")
@@ -13,7 +14,7 @@ T = TypeVar("T")
 class BlindReconnectTransport(BaseTransport):
     """每次交互都通过工厂创建新连接的 transport。"""
 
-    def __init__(self, target: object, spec: object) -> None:
+    def __init__(self, target: TargetSpec, spec: TransportSpec) -> None:
         super().__init__(target, spec)
         self._last_raw: Any = None
 

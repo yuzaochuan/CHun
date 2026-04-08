@@ -81,6 +81,15 @@
 
 模型层让 Registry 不只是“存值”，而是“存值 + 存上下文 + 存可信度”。
 
+`BaseInferenceResult` 当前暴露：
+
+- `raw_base`
+- `aligned_base`
+- `stored_fact`
+- `value`
+
+其中 `value` 是 `aligned_base` 的语义化别名，方便脚本里直接继续做地址计算。
+
 ## 为什么要显式带 `domain`
 
 `domain` 用来给未来插件预留能力域，不让所有记录都挤在一个平面命名空间里。

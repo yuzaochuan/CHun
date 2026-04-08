@@ -24,6 +24,7 @@ result = session.infer.libc_base_from_symbol_leak("puts", symbol_offset=puts_off
 
 print(hex(result.raw_base))
 print(hex(result.aligned_base))
+print(hex(result.value))
 print(session.registry.get_fact("libc.base"))
 ```
 
@@ -46,5 +47,6 @@ print(result.observation_name, hex(result.aligned_base))
 - `aligned_base`：页对齐后的候选值，通常作为后续基址
 - `raw_base`：按 observation 减去 offset 后得到的原始结果
 - `stored_fact`：已经写回 registry 的 `Fact`
+- `value`：`aligned_base` 的别名，适合直接参与后续地址计算
 
 当前阶段的 inference 目标是打通最小闭环，不是提前实现完整评分系统。

@@ -163,6 +163,11 @@ class BaseInferenceResult:
     aligned_base: int
     stored_fact: Fact
 
+    @property
+    def value(self) -> int:
+        """返回最常用的页对齐 base 值。"""
+        return self.aligned_base
+
 
 __all__ = [
     "Artifact",

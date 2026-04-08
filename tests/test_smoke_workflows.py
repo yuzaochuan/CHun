@@ -20,11 +20,12 @@ def test_smoke_ret2libc_workflow_uses_public_session_entrypoints() -> None:
     )
     result = session.resolve.libc_base_from_elf_symbol(
         "puts",
-        libc_elf=DummyLibc(sym={"puts": 0x80000}),
+        elf=DummyLibc(sym={"puts": 0x80000}),
         symbol="puts",
     )
 
     assert result.aligned_base == 0x7F1234500000
+    assert result.value == 0x7F1234500000
     assert session.registry.get_fact("libc.base").value == 0x7F1234500000
 
 

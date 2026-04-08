@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Mapping, Protocol, SupportsInt
 
 from ...bridges.pwntools import MemLeakAdapter
 from ..errors import ResolverError
@@ -10,6 +10,12 @@ from ..inference import InferenceService
 from ..models import BaseInferenceResult, RecordDomain, ResolvedSymbolResult
 from ..registry import EvidenceRegistry
 from .dynelf import DynELFResolver
+
+
+class SupportsSym(Protocol):
+    """最小 ELF 协议：只要求提供 ``sym`` 映射。"""
+
+    sym: Mapping[str, SupportsInt]
 
 
 class ResolveService:
@@ -75,13 +81,17 @@ class ResolveService:
         self,
         observation_name: str,
         *,
-        libc_elf: object,
+        libc_elf: SupportsSym | None = None,
+        elf: SupportsSym | None = None,
         symbol: str,
         fact_name: str = "libc.base",
     ) -> BaseInferenceResult:
-        if not hasattr(libc_elf, "sym"):
+        candidate = libc_elf if libc_elf is not None else elf
+        if candidate is None:
+            raise ResolverError("libc_elf 或 elf 至少需要提供一个。")
+        if not hasattr(candidate, "sym"):
             raise ResolverError("libc_elf 需要提供 .sym 映射。")
-        symbol_offset = int(libc_elf.sym[symbol])
+        symbol_offset = int(candidate.sym[symbol])
         return self.infer.libc_base_from_symbol_leak(
             observation_name,
             symbol_offset=symbol_offset,
@@ -92,7 +102,7 @@ class ResolveService:
         self,
         observation_name: str,
         *,
-        elf: object,
+        elf: SupportsSym,
         symbol: str,
         fact_name: str = "elf.base",
     ) -> BaseInferenceResult:

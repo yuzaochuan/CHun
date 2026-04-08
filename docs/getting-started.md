@@ -42,6 +42,10 @@ ssh_remote = CHun.ssh_process(
     user="ctf",
     binary="/home/ctf/challenge",
 )
+
+io = remote.io
+io.sendlineafter(b"menu> ", b"1")
+print(io.recvuntil(b"\n"))
 ```
 
 ## HTTP / WebSocket
@@ -108,7 +112,8 @@ session = CHun.process("./challenge")
 
 # ret2libc
 session.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
-# session.resolve.libc_base_from_elf_symbol("puts", libc_elf=libc, symbol="puts")
+# base = session.resolve.libc_base_from_elf_symbol("puts", elf=libc, symbol="puts")
+# print(hex(base.value))
 
 # blind leak -> DynELF
 blind = CHun.blind(lambda: object())

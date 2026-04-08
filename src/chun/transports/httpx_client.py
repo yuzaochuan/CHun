@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ..core.errors import MissingDependencyError, TransportConfigError
+from ..core.models import TargetSpec, TransportSpec
 from .base import BaseTransport
 
 
 class HttpxTransport(BaseTransport):
     """基于 httpx.Client 的 request/response transport。"""
 
-    def __init__(self, target: object, spec: object) -> None:
+    def __init__(self, target: TargetSpec, spec: TransportSpec) -> None:
         super().__init__(target, spec)
         self._client: Any = None
 

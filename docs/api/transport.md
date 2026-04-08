@@ -15,9 +15,13 @@ CHun 第一阶段把连接层独立为 transport。上层统一通过 `session.i
 主要方法：
 
 - `open()` / `close()` / `reconnect()`
-- `send()` / `sendline()`
+- `send()` / `sendline()` / `sendafter()` / `sendlineafter()`
 - `recv()` / `recvuntil()`
 - `interactive()`
+
+说明：
+
+- `session.io` 现在可以直接走常见的 pwntools 风格交互，不必先退回 `session.raw`
 
 ## `HttpxTransport`
 
