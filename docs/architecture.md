@@ -25,6 +25,18 @@
 
 `Tool.new_blind_tool()` 创建 `BlindFmtTool` 时会共享同一个 `registry`。blind 探测出的 `fmt.input_offset`、`fmt.stack.*` 会直接进入主 Registry，可立即参与后续推导和展示。
 
+## 推荐接口分层（`Tool.api`）
+
+为避免 `core/tool.py` 持续膨胀，CHun 把高频写题方法收口到 `Tool.api`（`RecommendedToolAPI`）：
+
+- 主类 `Tool` 保持稳定门面与兼容入口
+- `Tool.api` 承担 `record_*` / `infer_*` 这类便捷能力
+
+这样可以同时满足：
+
+- 普通写题：调用短、负担低
+- 高级调试：仍可直接下潜到 `reg/infer_base` 等底层机制
+
 ## `misc` 与地址记录的分流逻辑
 
 `add_log()` 最终走到 `PwnRegistry._add_any_value()`：

@@ -2,7 +2,7 @@
 
 ## `Tool`
 
-职责：面向脚本作者的主入口，协调目标启动、Registry 写入、base 推导和 blind 插件挂载。
+职责：面向脚本作者的主入口，协调目标启动、Registry 写入、base 推导和 blind 插件挂载，并通过 `Tool.api` 提供推荐便捷接口。
 
 详见：[Tool API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/tool.md)
 

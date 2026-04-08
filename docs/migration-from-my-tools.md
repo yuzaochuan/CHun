@@ -54,11 +54,12 @@ p.add_log("puts@libc", leak_addr)
 p.add_log(stage="leak-ok")
 
 # 推荐写法（语义更明确）
-p.reg.add_address("puts@libc", leak_addr)
-p.reg.add_log(stage="leak-ok")
+p.api.record_libc_symbol("puts", leak_addr)
+p.api.record_note("stage", "leak-ok")
 ```
 
 ## 兼容与不建议依赖的行为
 
 - 仍兼容：`my_tools.py` 导入、`add_log()`、`show()`/`puts_log()`
+- 推荐迁移：优先使用 `Tool.api.record_* / Tool.api.infer_*`
 - 不建议继续依赖：把所有状态当单层 dict 读写；推荐改为 `record/base/misc` 分层访问

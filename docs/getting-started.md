@@ -20,7 +20,7 @@ from chun import Tool, Blind, Reg
 p = Tool("./challenge")
 io = p.start()
 
-p.add_log("puts@libc", 0x7F1234580000)
+p.api.record_libc_symbol("puts", 0x7F1234580000)
 p.show()
 ```
 
@@ -33,17 +33,18 @@ p = Tool("./challenge", host="example.com", port=31337)
 io = p.start(remote_mode=False)  # 本地起进程
 
 # 1) 记录泄漏
-p.add_log("puts@libc", 0x7F1234580000)
+p.api.record_libc_symbol("puts", 0x7F1234580000)
 
 # 2) 推导 base
-candidate = p.derive_base("puts@libc", p.libc.sym["puts"], base_name="libc")
+candidate = p.api.infer_libc_base_from("puts")
 print(hex(candidate.aligned_base), candidate.score)
 
 # 3) 查看当前全局状态
-p.show()
+p.show()  # 默认简洁
+# p.show(verbose=True)  # 调试时看元信息
 ```
 
 ## 兼容层 vs 新架构入口
 
 - 兼容层调用：`add_log()`、`leaks_data`、`my_tools.py` 导入
-- 推荐入口：`Tool` + `Reg` + `Blind` 组合，状态统一回流 `PwnRegistry`
+- 推荐入口：`Tool` + `api.record_* / api.infer_*` + `show(verbose=...)`

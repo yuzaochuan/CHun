@@ -35,7 +35,15 @@
 
 ## 关于 `_extract_add_log_meta()`
 
-当前代码（`src/chun/core/registry.py`）没有 `_extract_add_log_meta()`。如果后续需要从 `add_log()` 自动拆解 `kind/source/confidence/meta`，建议新增该辅助函数；目前这是 Future work。
+当前代码已经实现 `_extract_add_log_meta()`，并支持在“单条记录可明确定位”时透传以下元字段：
+
+- `kind`
+- `source`
+- `confidence`
+- `notes`
+- `meta`
+
+这让你可以在保持旧写法的同时，按需补充结构化元信息。
 
 ## `infer_base()` 作用、参数、返回值
 
@@ -63,6 +71,13 @@
 ## `classify_address()` 启发式能力
 
 `classify_address(value)` 返回 `AddressClass`，用于快速判断地址更像 `PIE/LIBC/STACK/HEAP`。这是提示能力，不是严格证明。
+
+## `puts_log(verbose=False)` 输出模式
+
+- 默认 `verbose=False`：简洁视图，只显示核心键值
+- `verbose=True`：展开 `kind/source/confidence` 详细字段
+
+对应 `Tool.show(verbose=...)` 会透传该模式。
 
 ## `kind / source / confidence / notes / meta` 含义
 

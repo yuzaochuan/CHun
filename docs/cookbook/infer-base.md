@@ -14,8 +14,9 @@ p = Tool("./challenge")
 puts_leak = 0x7F1234580000
 puts_offset = 0x080000
 
-p.add_log("puts@libc", puts_leak)
-candidate = p.infer_base("puts@libc", puts_offset, base_name="libc")
+# 推荐写法：高频流程走 api
+p.api.record_libc_symbol("puts", puts_leak)
+candidate = p.api.infer_libc_base_from("puts")
 
 print(hex(candidate.raw_base))
 print(hex(candidate.aligned_base))

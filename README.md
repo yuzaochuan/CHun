@@ -34,7 +34,7 @@ p.show()  # 默认简洁视图
 ## 推荐接口（普通打题）
 
 - `Tool(...)`
-- `start()` / `connect()`
+- `start()` / `api.connect()`
 - `api.record_libc_symbol()` / `api.record_stack_ptr()` / `api.record_heap_ptr()`
 - `api.record_base()` / `api.record_derived()` / `api.record_note()`
 - `api.infer_libc_base_from()` / `api.infer_pie_base_from()`
@@ -65,8 +65,8 @@ def interact(io, payload: bytes) -> bytes | None:
 p = Tool("./challenge")
 io = p.start()
 
-p.add_log("puts@libc", 0x7F1234580000)
-candidate = p.derive_base("puts@libc", p.libc.sym["puts"], base_name="libc")
+p.api.record_libc_symbol("puts", 0x7F1234580000)
+candidate = p.api.infer_libc_base_from("puts")
 print(hex(candidate.aligned_base), candidate.score)
 p.show()
 ```
