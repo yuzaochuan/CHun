@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from chun import CHun, MyTool, Reg, Tool
-from chun.core.registry import PwnRegistry, RecordKind, RecordSource
+from chun.core.registry import BaseCandidate, PwnRegistry, RecordKind, RecordSource
 
 
 def test_public_aliases_are_consistent() -> None:
@@ -59,6 +59,32 @@ def test_show_forwards_verbose_flag() -> None:
     assert called == [False, True]
 
 
+def test_infer_base_forwards_to_show_last_infer() -> None:
+    tool = MyTool.__new__(MyTool)
+    tool.reg = PwnRegistry()
+    calls: list[bool] = []
+
+    def _fake_infer_base(**_kwargs: object) -> BaseCandidate:
+        return BaseCandidate(
+            base_name="libc",
+            raw_base=0x7F1234501000,
+            aligned_base=0x7F1234500000,
+            score=0.70,
+            reasons=["测试候选"],
+        )
+
+    def _fake_show_last_infer(*, verbose: bool = False) -> None:
+        calls.append(verbose)
+
+    tool.reg.infer_base = _fake_infer_base  # type: ignore[method-assign]
+    tool.reg.show_last_infer = _fake_show_last_infer  # type: ignore[method-assign]
+
+    tool.infer_base("puts@libc", 0x1000)
+    tool.infer_base("puts@libc", 0x1000, verbose=True)
+
+    assert calls == [False, True]
+
+
 def test_infer_libc_base_from_uses_libc_symbol_and_suffix_fallback() -> None:
     class _DummyLibc:
         sym = {"puts": 0x80000}
@@ -91,3 +117,19 @@ def test_infer_pie_base_from_uses_elf_symbol_and_suffix_fallback() -> None:
     candidate = tool.api.infer_pie_base_from("main_ret")
     assert candidate.aligned_base == expected_base
     assert tool.reg.get_base("pie") is not None
+
+
+def test_api_show_snapshot_forwards_verbose_flag() -> None:
+    tool = MyTool.__new__(MyTool)
+    tool.reg = PwnRegistry()
+    called: list[bool] = []
+
+    def _fake_show_snapshot(*, verbose: bool = False) -> None:
+        called.append(verbose)
+
+    tool.show_snapshot = _fake_show_snapshot  # type: ignore[method-assign]
+
+    tool.api.show_snapshot()
+    tool.api.show_snapshot(verbose=True)
+
+    assert called == [False, True]

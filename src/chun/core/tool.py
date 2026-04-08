@@ -211,6 +211,14 @@ class MyTool:
         """
         self.reg.puts_log(verbose=verbose)
 
+    def show_snapshot(self, verbose: bool = False) -> None:
+        """显式输出全量 Registry 快照。"""
+        self.reg.show_snapshot(verbose=verbose)
+
+    def show_last_infer(self, verbose: bool = False) -> None:
+        """显示最近一次 infer 结果的分层视图。"""
+        self.reg.show_last_infer(verbose=verbose)
+
     def show(self, verbose: bool = False) -> None:
         """`puts_log()` 的短别名。
 
@@ -233,6 +241,7 @@ class MyTool:
         base_name: str | None = None,
         min_accept_score: float | None = None,
         store: bool = True,
+        verbose: bool = False,
     ) -> BaseCandidate:
         """推导并按阈值决定是否写入 base。
 
@@ -241,13 +250,15 @@ class MyTool:
 
         这里保留这个入口，是为了让“从泄漏推 libc/PIE base”继续像传统脚本那样顺手。
         """
-        return self.reg.infer_base(
+        candidate = self.reg.infer_base(
             leak_name=leak_name,
             symbol_offset=symbol_offset,
             base_name=base_name,
             min_accept_score=min_accept_score,
             store=store,
         )
+        self.reg.show_last_infer(verbose=verbose)
+        return candidate
 
     def derive_base(
         self,
@@ -255,19 +266,22 @@ class MyTool:
         symbol_offset: int,
         base_name: str | None = None,
         min_accept_score: float | None = None,
+        verbose: bool = False,
     ) -> BaseCandidate:
         """`infer_base()` 的写题友好别名。
 
         语义上更贴近“我现在就想从这个泄漏推一个 base 出来”，
         因此 README 里也更推荐使用这个名字。
         """
-        return self.reg.infer_base(
+        candidate = self.reg.infer_base(
             leak_name=leak_name,
             symbol_offset=symbol_offset,
             base_name=base_name,
             min_accept_score=min_accept_score,
             store=True,
         )
+        self.reg.show_last_infer(verbose=verbose)
+        return candidate
 
     @staticmethod
     def _normalize_symbol_name(name: str) -> str:
