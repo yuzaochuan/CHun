@@ -14,9 +14,9 @@ from .resolve import ResolveService
 
 @dataclass(slots=True)
 class CHunSession:
-    """第二阶段最小可用会话对象。
+    """当前阶段稳定的会话对象。
 
-    当前阶段把 registry 和最小 inference 一并挂回 session：
+    当前阶段把 transport、registry、inference 与 bridge 一并挂回 session：
     - `target`：目标描述
     - `transport_spec`：transport 配置
     - `transport`：实际 transport 实例
@@ -139,7 +139,4 @@ class CHunSession:
         self.close()
 
 
-Session = CHunSession
-
-
-__all__ = ["CHunSession", "Session"]
+__all__ = ["CHunSession"]

@@ -23,6 +23,13 @@ result = p.infer.libc_base_from_symbol_leak("puts", symbol_offset=0x80000)
 print(hex(result.aligned_base))
 ```
 
+## 稳定公开入口
+
+- `CHun.process()` / `CHun.remote()` / `CHun.ssh_process()`
+- `CHun.http()` / `CHun.websocket()` / `CHun.blind()`
+- `session.io` / `session.registry` / `session.rec` / `session.infer`
+- `session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
+
 ## 本地 / 远程 / SSH
 
 ```python
@@ -90,6 +97,25 @@ resolved = session.resolve.symbol_via_dynelf(
     lib="libc",
 )
 print(hex(resolved.address))
+```
+
+## 三条最小 workflow
+
+```python
+from chun import CHun
+
+session = CHun.process("./challenge")
+
+# ret2libc
+session.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+# session.resolve.libc_base_from_elf_symbol("puts", libc_elf=libc, symbol="puts")
+
+# blind leak -> DynELF
+blind = CHun.blind(lambda: object())
+# blind.resolve.symbol_via_dynelf("system", leak_primitive=leak_func, pointer=0x601018)
+
+# corefile -> crash facts
+# session.crash.analyze("/tmp/core")
 ```
 
 ## 当前阶段边界

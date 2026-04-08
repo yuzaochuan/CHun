@@ -2,7 +2,7 @@
 
 ## CHun 是什么
 
-CHun 目前处于源码重构第二阶段。顶层入口已经切到 `CHun` 工厂与 `CHunSession`，并在 transport 运行时之上正式挂接了新的 registry / evidence / 最小 inference 闭环。
+CHun 目前处于源码重构第三轮收口阶段。顶层入口已经固定为 `CHun` 工厂与 `CHunSession`，并在 transport / registry / inference 之上接入了 debug、resolve、crash 三类 bridge。
 
 ## 适用场景
 
@@ -16,7 +16,8 @@ CHun 目前处于源码重构第二阶段。顶层入口已经切到 `CHun` 工�
 - 已实现：`TargetSpec` / `TransportSpec` / `CHunSession`
 - 已实现：`PwntoolsTubeTransport`、`HttpxTransport`、`WebSocketTransport`、`BlindReconnectTransport`
 - 已实现：`EvidenceRegistry`、`session.rec`、`session.infer`
-- 刻意未做：fmt/heap/template/debugger bridge 主体
+- 已实现：`session.dbg`、`session.gdb_mi`、`session.resolve`、`session.crash`
+- 刻意未做：fmt/heap/template 主体与 pwngdb/pwndbg 深整合
 
 ## 文档导航
 

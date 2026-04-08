@@ -14,6 +14,15 @@ ws = CHun.websocket("ws://127.0.0.1:9001")
 blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 ```
 
+当前稳定保留的工厂方法只有：
+
+- `CHun.process()`
+- `CHun.remote()`
+- `CHun.ssh_process()`
+- `CHun.http()`
+- `CHun.websocket()`
+- `CHun.blind()`
+
 ## `CHunSession`
 
 每个工厂方法都会返回一个 `CHunSession`。第三轮它已经承载 transport、registry、最小 inference，以及调试 / 解析 / crash 分析入口：
@@ -30,6 +39,14 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - `crash`：`CorefileAnalyzer`
 - `io`：延迟打开后的 transport 访问入口
 - `raw`：底层原始连接对象
+
+其中推荐把下面这些看作下一阶段插件开发的稳定挂接点：
+
+- `session.registry` / `session.rec`
+- `session.infer`
+- `session.resolve`
+- `session.crash`
+- `session.dbg` / `session.gdb_mi`
 
 ## 工厂方法
 

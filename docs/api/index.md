@@ -2,7 +2,7 @@
 
 ## `CHun`
 
-职责：统一工厂入口，按 target/transport 组合构建 `CHunSession`。
+职责：统一工厂入口，按 target/transport 组合构建 `CHunSession`。当前稳定入口固定为 `process`、`remote`、`ssh_process`、`http`、`websocket`、`blind`。
 
 详见：[Session API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/tool.md)
 

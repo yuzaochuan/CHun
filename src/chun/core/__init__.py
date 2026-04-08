@@ -39,9 +39,9 @@ from .models import (
     TransportKind,
     TransportSpec,
 )
-from .registry import EvidenceRegistry, Registry
+from .registry import EvidenceRegistry
 from .resolve import DynELFResolver, ResolveService
-from .session import CHunSession, Session
+from .session import CHunSession
 
 __all__ = [
     "Artifact",
@@ -70,14 +70,12 @@ __all__ = [
     "ObservationKind",
     "PwntoolsGdbBridge",
     "RecordDomain",
-    "Registry",
     "RegistryConflictError",
     "RegistryError",
     "RegistryNotFoundError",
     "ResolveService",
     "ResolvedSymbolResult",
     "ResolverError",
-    "Session",
     "TargetKind",
     "TargetSpec",
     "TransportCapabilityError",

@@ -1,6 +1,6 @@
 # Registry API
 
-## `EvidenceRegistry` / `Registry` 的职责
+## `EvidenceRegistry` 的职责
 
 `EvidenceRegistry` 是 CHun 第二阶段正式落地的统一事实层，负责：
 
@@ -8,8 +8,6 @@
 - 记录稳定事实（`facts`）
 - 记录可复用产物（`artifacts`）
 - 记录会话上下文（`context`）
-
-`Registry` 是 `EvidenceRegistry` 的别名。
 
 ## 四类记录分别是什么
 
@@ -97,3 +95,11 @@
 3. 把结果写回 fact，例如 `libc.base`
 
 这证明新的 registry 不是纯存储壳，而是能承接 session + inference 的最小工作流闭环。
+
+## 当前推荐入口
+
+- 类型名使用 `EvidenceRegistry`
+- 会话内访问优先使用 `session.registry`
+- 需要短写时使用 `session.rec`
+
+不再把额外别名当作长期公开接口。

@@ -95,3 +95,5 @@ resolved = session.resolve.symbol_via_dynelf(
 report = session.crash.analyze("/tmp/core")
 print(report.pc, report.cyclic_offset)
 ```
+
+这些 workflow 在当前仓库里都有独立 smoke test，并且都只走 `CHun` + `CHunSession` 的公开入口。

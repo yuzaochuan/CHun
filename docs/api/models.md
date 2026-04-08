@@ -14,6 +14,9 @@
 - `Artifact`
 - `ContextEntry`
 - `BaseInferenceResult`
+- `ResolvedSymbolResult`
+- `CrashAnalysisResult`
+- `GdbMiResult`
 
 ## `TargetSpec`
 
@@ -72,6 +75,9 @@
 - `Artifact`：记录可复用产物
 - `ContextEntry`：记录会话上下文
 - `BaseInferenceResult`：承载最小 base inference 闭环结果
+- `ResolvedSymbolResult`：承载 DynELF / symbol resolve 结果
+- `CrashAnalysisResult`：承载 core dump 分析结果
+- `GdbMiResult`：承载结构化 GDB/MI 命令结果
 
 模型层让 Registry 不只是“存值”，而是“存值 + 存上下文 + 存可信度”。
 

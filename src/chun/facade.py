@@ -51,8 +51,6 @@ class CHun:
         transport = TransportSpec(kind="pwntools-tube")
         return cls.from_specs(target, transport)
 
-    binary = process
-
     @classmethod
     def remote(
         cls,

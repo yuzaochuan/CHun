@@ -60,8 +60,12 @@
 - `session.rec`
 - `session.infer`
 - `session.io`
+- `session.dbg`
+- `session.gdb_mi`
+- `session.resolve`
+- `session.crash`
 
-未来会继续往 `session.rec / infer / dbg / fmt / heap / tpl` 扩展，但这不在本阶段范围内。
+本轮收口后，面向后续插件开发的公开入口已经固定在这组字段上；下一阶段应优先复用这些入口，而不是继续新增临时 facade。
 
 ## Transport 统一原则
 
@@ -106,3 +110,13 @@
 - bridge 产物必须回写 registry
 - ret2libc / blind leak / core dump 三条 workflow 优先打通
 - 不提前展开 fmt / heap / template 主体
+
+## 当前公开 API 收口
+
+当前对外只保留以下稳定主路径：
+
+- 顶层工厂：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()` / `CHun.http()` / `CHun.websocket()` / `CHun.blind()`
+- 会话入口：`session.io` / `session.registry` / `session.rec` / `session.infer`
+- bridge / workflow：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
+
+不再把重复别名当作长期公开接口，例如旧的 `CHun.binary`、`Registry`、`Session` 不再作为推荐入口保留。

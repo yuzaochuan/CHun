@@ -2,7 +2,7 @@
 
 CHun: a lightweight and evolving Pwn toolkit by Chenhun.
 
-CHun 当前已进入第三轮重构：在前两轮的 transport + registry/session 地基之上，正式接入了 pwntools / GDB bridge、DynELF 解析链路和 core dump 分析入口。
+CHun 当前已进入第三轮收口阶段：在前两轮的 transport + registry/session 地基之上，已经固定了 pwntools / GDB bridge、DynELF 解析链路和 core dump 分析入口的公开用法。
 
 ## 核心特性
 
@@ -12,6 +12,12 @@ CHun 当前已进入第三轮重构：在前两轮的 transport + registry/sessi
 - 会话内统一事实层：`session.registry` / `session.rec`
 - 最小 inference 入口：`session.infer`
 - 调试与解析入口：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
+
+## 当前稳定公开接口
+
+- 顶层工厂：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()` / `CHun.http()` / `CHun.websocket()` / `CHun.blind()`
+- 会话入口：`session.io` / `session.registry` / `session.rec` / `session.infer`
+- 调试与解析：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
 
 ## 安装
 
@@ -71,12 +77,16 @@ session.rec.set_context("libc.path", "/glibc/libc.so.6", domain=RecordDomain.LIB
 session.rec.record_artifact("payload.stage1", b"AAAA", tags=["payload"])
 ```
 
-## Bridge Workflow 示例
+## 最小 workflow 示例
 
 ```python
 from chun import CHun
 
 session = CHun.process("./challenge")
+
+# ret2libc
+session.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+# session.resolve.libc_base_from_elf_symbol("puts", libc_elf=libc, symbol="puts")
 
 # 交互式 GDB attach
 # session.dbg.attach(script="b *main\nc")

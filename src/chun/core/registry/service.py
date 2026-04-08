@@ -278,8 +278,4 @@ class EvidenceRegistry:
             "context": {name: asdict(item) for name, item in self.context.items()},
         }
 
-
-Registry = EvidenceRegistry
-
-
-__all__ = ["EvidenceRegistry", "Registry"]
+__all__ = ["EvidenceRegistry"]
