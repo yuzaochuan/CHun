@@ -65,10 +65,27 @@ from chun import Tool
 p = Tool("./challenge", remote_mode=False)
 io = p.start()
 
-p.add_log("puts@libc", 0x7ffff7a5f5e0)
-p.derive_base("puts@libc", p.libc.sym["puts"], base_name="libc")
-p.show()
+p.api.record_libc_symbol("puts", 0x7ffff7a5f5e0)
+p.api.infer_libc_base_from("puts")
+p.show()  # 默认简洁视图
+# p.show(verbose=True)  # 详细视图：kind/source/confidence
 ```
+
+## 推荐接口（普通打题）
+
+- `Tool(...)`
+- `start()` / `connect()`
+- `api.record_libc_symbol()` / `api.record_stack_ptr()` / `api.record_heap_ptr()`
+- `api.record_base()` / `api.record_derived()` / `api.record_note()`
+- `api.infer_libc_base_from()` / `api.infer_pie_base_from()`
+- `show()`（简洁）/ `show(verbose=True)`（详细）
+
+## 高级接口（框架扩展/调试）
+
+- `Reg` / `PwnRegistry`
+- `add_log()` / `infer_base()` / `derive_base()`
+- `RecordKind` / `RecordSource`
+- `BaseCandidate`
 
 ## Blind 模式
 

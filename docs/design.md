@@ -6,6 +6,16 @@
 2. 状态收口：泄漏和推导结果统一进入 `PwnRegistry`
 3. API 稳定：通过 `Tool`（`MyTool` 别名）统一入口
 4. 渐进迁移：保留 `my_tools.py` 兼容层，降低旧脚本迁移风险
+5. 复杂度分层：默认暴露“推荐接口”，高级机制按需下潜
+
+## 2.5 使用分层
+
+- 推荐接口（普通写题）
+  - `api.record_*` / `api.infer_*` / `show()`
+  - 目标是“一眼可懂、拿来就打”
+- 高级接口（扩展与调试）
+  - `PwnRegistry` / `RecordKind` / `RecordSource` / `infer_base()`
+  - 目标是“可观测、可推理、可扩展”
 
 ## 2. 模块职责
 

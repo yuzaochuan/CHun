@@ -24,13 +24,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .._compat import log
 from ..plugins.blind import BlindFmtTool, InteractFunc
 from ..utils.misc import itob
 from .registry import AddressClass, BaseCandidate, PwnRegistry
 from .target import DEFAULT_TERMINAL, TargetConfig, TargetSession, TubeLike
+
+if TYPE_CHECKING:
+    from .recommended import RecommendedToolAPI
 
 
 class MyTool:
@@ -76,6 +79,7 @@ class MyTool:
             )
         )
         self.blind: BlindFmtTool | None = None
+        self._api: RecommendedToolAPI | None = None
 
     @property
     def elf(self) -> Any:
@@ -115,6 +119,21 @@ class MyTool:
         snapshot = self.reg.to_dict()
         data.update(snapshot["misc"])
         return data
+
+    @property
+    def api(self) -> "RecommendedToolAPI":
+        """推荐用户接口入口（高频写题能力收口层）。
+
+        这里通过 `@property` 懒加载包装对象，把“便捷 API”放到独立模块，
+        避免 `tool.py` 继续膨胀，同时保持 `t.api.xxx()` 的调用手感。
+        """
+        current = getattr(self, "_api", None)
+        if current is None:
+            from .recommended import RecommendedToolAPI
+
+            current = RecommendedToolAPI(self)
+            self._api = current
+        return current
 
     def start(
         self,
@@ -183,20 +202,21 @@ class MyTool:
         """
         self.reg.add_log(name=name, value=value, **kwargs)
 
-    def puts_log(self) -> None:
+    def puts_log(self, verbose: bool = False) -> None:
         """打印当前 Registry 快照。
 
         这个方法偏向“打题中途查看全局态势”：
-        你可以快速看到已经有哪些泄漏、推了哪些 base、还留了哪些杂项备注。
+        - 默认 `verbose=False`：只看核心值
+        - `verbose=True`：显示 kind/source/confidence 细节
         """
-        self.reg.puts_log()
+        self.reg.puts_log(verbose=verbose)
 
-    def show(self) -> None:
+    def show(self, verbose: bool = False) -> None:
         """`puts_log()` 的短别名。
 
         保留短名是为了贴近旧代码和手打习惯，减少切换成本。
         """
-        self.puts_log()
+        self.puts_log(verbose=verbose)
 
     def classify_address(self, value: int) -> AddressClass:
         """调用 Registry 的地址分类逻辑。

@@ -560,8 +560,12 @@ class PwnRegistry:
             store=True,
         )
 
-    def puts_log(self) -> None:
-        """按分组打印 Registry 快照，适合打题时快速看全局状态。"""
+    def puts_log(self, verbose: bool = False) -> None:
+        """按分组打印 Registry 快照，适合打题时快速看全局状态。
+
+        默认展示简洁信息，减少日常打题时的视觉负担；
+        当 `verbose=True` 时再展开显示元信息细节。
+        """
         address_rows = [
             (
                 record.name,
@@ -578,7 +582,7 @@ class PwnRegistry:
         ]
         misc_rows = list(self._misc.items())
 
-        print_registry_snapshot(address_rows, base_rows, misc_rows)
+        print_registry_snapshot(address_rows, base_rows, misc_rows, verbose=verbose)
 
     def to_dict(self) -> dict[str, Any]:
         """导出当前快照为普通字典，便于序列化/调试。"""

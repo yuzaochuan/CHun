@@ -23,8 +23,13 @@ def print_registry_snapshot(
     address_rows: Iterable[tuple[str, int, str, str, float]],
     base_rows: Iterable[tuple[str, int, str, float]],
     misc_rows: Iterable[tuple[str, Any]],
+    verbose: bool = False,
 ) -> None:
-    """按固定布局输出 Registry 快照。"""
+    """按固定布局输出 Registry 快照。
+
+    - 默认简洁视图：只突出“名字 + 值”
+    - 详细视图（verbose）：展开 kind/source/confidence
+    """
     print("\n" + "=" * 72)
     log.success("CHUN 状态快照")
     print("-" * 72)
@@ -36,20 +41,26 @@ def print_registry_snapshot(
         has_output = True
         print_section("地址记录")
         for name, value, kind, source, confidence in address_rows:
-            log.info(
-                f"{name:<24} {format_value(value):<18} "
-                f"kind={kind:<12} src={source:<12} conf={confidence:.2f}"
-            )
+            if verbose:
+                log.info(
+                    f"{name:<24} {format_value(value):<18} "
+                    f"kind={kind:<12} src={source:<12} conf={confidence:.2f}"
+                )
+            else:
+                log.info(f"{name:<24} {format_value(value)}")
 
     base_rows = list(base_rows)
     if base_rows:
         has_output = True
         print_section("Base 记录")
         for name, base, source, confidence in base_rows:
-            log.info(
-                f"{name:<24} {format_value(base):<18} "
-                f"src={source:<12} conf={confidence:.2f}"
-            )
+            if verbose:
+                log.info(
+                    f"{name:<24} {format_value(base):<18} "
+                    f"src={source:<12} conf={confidence:.2f}"
+                )
+            else:
+                log.info(f"{name:<24} {format_value(base)}")
 
     misc_rows = list(misc_rows)
     if misc_rows:
