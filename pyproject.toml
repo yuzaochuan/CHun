@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chun"
+version = "0.1.0"
+description = "CHun: composable pwn framework with registry-centric architecture"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "CHun contributors" }
+]
+dependencies = [
+  "pwntools>=4.12"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0"
+]
+
+[project.scripts]
+chun = "chun.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["chun*"]
+
+[tool.setuptools.package-data]
+chun = ["templates/*.tpl"]
+
+[tool.pytest.ini_options]
+addopts = "-q --import-mode=importlib"
+testpaths = ["tests"]
+pythonpath = ["src"]

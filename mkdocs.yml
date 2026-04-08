@@ -1,0 +1,40 @@
+site_name: CHun
+site_description: CHun Pwn toolkit documentation
+site_url: ""
+repo_name: CHun
+repo_url: ""
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: readthedocs
+  language: zh
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - 首页: index.md
+  - 快速开始: getting-started.md
+  - 安装: installation.md
+  - 架构设计: architecture.md
+  - 从 my_tools 迁移: migration-from-my-tools.md
+  - API:
+      - 总览: api/index.md
+      - Tool: api/tool.md
+      - Registry: api/registry.md
+      - Blind: api/blind.md
+      - Models: api/models.md
+  - Cookbook:
+      - 总览: cookbook/index.md
+      - 本地调试: cookbook/local-debug.md
+      - 远程目标: cookbook/remote-target.md
+      - Blind FMT 工作流: cookbook/blind-fmt-workflow.md
+      - Base 推导: cookbook/infer-base.md
+  - 开发文档:
+      - 总览: development/index.md
+      - 路线图: development/roadmap.md
+      - 文档规范: development/documentation-style.md
