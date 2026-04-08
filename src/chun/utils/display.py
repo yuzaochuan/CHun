@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Iterable
 
 from .._compat import log
@@ -14,6 +15,7 @@ _ANSI_RED = "\033[31m"
 _ANSI_GRAY = "\033[90m"
 _ANSI_CYAN = "\033[36m"
 _ANSI_BLUE = "\033[34m"
+_ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def format_value(value: Any) -> str:
@@ -63,15 +65,54 @@ def _fmt_address(value: int) -> str:
 def print_event_line(level: str, message: str) -> None:
     """事件流输出：统一符号与语气。"""
     if level == "success":
-        log.success(f"[+] {message}")
+        log.success(message)
         return
     if level == "warning":
-        log.warning(f"[!] {message}")
+        log.warning(message)
         return
     if level == "error":
-        log.error(f"[-] {message}")
+        log.error(message)
         return
-    log.info(f"[*] {message}")
+    log.info(message)
+
+
+def _strip_ansi(text: str) -> str:
+    """去掉 ANSI 转义序列，便于计算可视宽度。"""
+    return _ANSI_PATTERN.sub("", text)
+
+
+def _visual_width(text: str) -> int:
+    """计算字符串在终端中的可视宽度（考虑中文宽字符）。"""
+    width = 0
+    for char in _strip_ansi(text):
+        if unicodedata.combining(char):
+            continue
+        if unicodedata.east_asian_width(char) in {"W", "F"}:
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def _slice_to_width(text: str, max_width: int) -> str:
+    """按可视宽度截断字符串，并尽量保留 ANSI 序列。"""
+    if max_width <= 0:
+        return ""
+    tokens = re.findall(r"\x1b\[[0-9;]*m|.", text, flags=re.DOTALL)
+    out: list[str] = []
+    used = 0
+    for token in tokens:
+        if _ANSI_PATTERN.fullmatch(token):
+            out.append(token)
+            continue
+        char_width = 0 if unicodedata.combining(token) else (
+            2 if unicodedata.east_asian_width(token) in {"W", "F"} else 1
+        )
+        if used + char_width > max_width:
+            break
+        out.append(token)
+        used += char_width
+    return "".join(out)
 
 
 def _print_box(title: str, lines: list[str], width: int = 78) -> None:
@@ -83,8 +124,11 @@ def _print_box(title: str, lines: list[str], width: int = 78) -> None:
     right = max(0, inner - len(label) - left)
     print("+" + "-" * left + label + "-" * right + "+")
     for line in lines:
-        clean = line if len(line) <= inner else f"{line[: inner - 3]}..."
-        print(f"| {clean:<{inner}} |")
+        content = line
+        if _visual_width(content) > inner:
+            content = _slice_to_width(content, max(0, inner - 3)) + "..."
+        padding = max(0, inner - _visual_width(content))
+        print(f"| {content}{' ' * padding} |")
     print("+" + "-" * inner + "+")
 
 
