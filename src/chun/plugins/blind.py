@@ -11,17 +11,16 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from .._compat import context, log
 from ..core.registry import PwnRegistry, RecordKind, RecordSource
-from ..core.target import TubeLike
 
 
 class InteractFunc(Protocol):
     """盲打交互函数协议。"""
 
-    def __call__(self, io_obj: TubeLike, payload: bytes) -> bytes | None:
+    def __call__(self, io_obj: Any, payload: bytes) -> bytes | None:
         ...
 
 
@@ -30,7 +29,7 @@ class BlindFmtTool:
 
     def __init__(
         self,
-        io_factory: Callable[[], TubeLike],
+        io_factory: Callable[[], Any],
         interact_func: InteractFunc,
         registry: PwnRegistry | None = None,
         arch: int = 64,
@@ -45,7 +44,7 @@ class BlindFmtTool:
         self.delay = delay
         self.timeout = timeout
 
-        self.current_io: TubeLike | None = None
+        self.current_io: Any | None = None
         self.offset: int = -1
 
         self._ensure_connection()
@@ -60,7 +59,7 @@ class BlindFmtTool:
         """兼容历史拼写错误 `offest`，统一映射到 `offset`。"""
         self.offset = value
 
-    def _ensure_connection(self) -> TubeLike:
+    def _ensure_connection(self) -> Any:
         """确保当前存在可用连接；断开时自动重建。"""
         if self.current_io is None:
             self.current_io = self.io_factory()

@@ -1,14 +1,41 @@
 """CHun 对外公共接口。"""
 
-from .core import CHun, MyTool, PwnRegistry, Reg, Tool
-from .plugins import Blind, BlindFmtTool
+from .core import (
+    CHunError,
+    CHunSession,
+    MissingDependencyError,
+    PwnRegistry,
+    Reg,
+    Session,
+    TargetSpec,
+    TransportCapabilityError,
+    TransportClosedError,
+    TransportConfigError,
+    TransportSpec,
+)
+from .facade import CHun
+from .transports import (
+    BlindReconnectTransport,
+    HttpxTransport,
+    PwntoolsTubeTransport,
+    WebSocketTransport,
+)
 
 __all__ = [
-    "Blind",
-    "BlindFmtTool",
+    "BlindReconnectTransport",
     "CHun",
-    "MyTool",
+    "CHunError",
+    "CHunSession",
+    "HttpxTransport",
+    "MissingDependencyError",
     "PwnRegistry",
+    "PwntoolsTubeTransport",
     "Reg",
-    "Tool",
+    "Session",
+    "TargetSpec",
+    "TransportCapabilityError",
+    "TransportClosedError",
+    "TransportConfigError",
+    "TransportSpec",
+    "WebSocketTransport",
 ]

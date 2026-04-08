@@ -1,65 +1,68 @@
 # 从 `my_tools.py` 迁移
 
-## 旧版能力概述
+## 这次迁移的方向
 
-旧版脚本通常通过单一 `MyTool` 对象完成启动、泄漏记录、blind 试探和地址推导，状态多以松散字典读取。
+第一阶段重构不再保留 `my_tools.py` 兼容层，也不再把 `Tool` 作为主入口。迁移目标不是“旧接口原样挪过去”，而是把脚本切到新的 session + transport 入口。
 
-## 新版对应关系
+## 对应关系
 
-- `MyTool` -> `Tool`（二者当前仍是同一实现）
-- `BlindFmtTool` -> `Blind`
-- `leaks_data` -> `PwnRegistry` 统一视图（地址记录 + misc）
-- `add_log()` -> 兼容入口，底层进入结构化 Registry
+- `MyTool("./chall")` -> `CHun.process("./chall")`
+- `MyTool(..., host=..., port=..., remote_mode=True)` -> `CHun.remote(host, port, binary=...)`
+- `remote_mode: bool` -> `TargetSpec.kind` / `TransportSpec.kind`
+- `BlindFmtTool` 的“自动重连”职责 -> `CHun.blind()` / `BlindReconnectTransport`
 
 ## 常见迁移示例
 
-### `MyTool` -> `Tool`
+### 本地进程
 
 ```python
 # old
 from my_tools import MyTool
 p = MyTool("./challenge")
+io = p.start()
 
 # new
-from chun import Tool
-p = Tool("./challenge")
+from chun import CHun
+p = CHun.process("./challenge")
+io = p.io.raw
 ```
 
-### `BlindFmtTool` -> `Blind`
+### 远程连接
 
 ```python
 # old
-from my_tools import BlindFmtTool
+p = MyTool("./challenge", host="example.com", port=31337, remote_mode=True)
+io = p.start()
 
 # new
-from chun import Blind
+p = CHun.remote("example.com", 31337, binary="./challenge")
+io = p.io.raw
 ```
 
-### `leaks_data` -> Registry/地址记录
+### blind reconnect
 
 ```python
-# old
-print(p.leaks_data.get("puts@libc"))
+from chun import CHun
 
-# new (推荐)
-record = p.reg.get_record("puts@libc")
-print(record.value if record else None)
+
+blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
+response = blind.io.exchange(
+    b"%9$p",
+    receive=lambda io: io.recvuntil(b"\n"),
+    newline=True,
+)
 ```
 
-### `add_log()` 兼容写法与推荐写法
+## 当前阶段不再承诺的行为
 
-```python
-# 兼容写法（仍支持）
-p.add_log("puts@libc", leak_addr)
-p.add_log(stage="leak-ok")
+- `my_tools.py` 导入
+- `Tool` / `MyTool` 旧表面 API
+- `remote_mode` 布尔切换
+- 把 blind / local / remote / web 逻辑继续揉在一个类里
 
-# 推荐写法（语义更明确）
-p.api.record_libc_symbol("puts", leak_addr)
-p.api.record_note("stage", "leak-ok")
-```
+## 仍然保留但尚未重新挂回 session 的部分
 
-## 兼容与不建议依赖的行为
+- `PwnRegistry`
+- `infer_base()` 相关推导能力
 
-- 仍兼容：`my_tools.py` 导入、`add_log()`、`show()`/`puts_log()`
-- 推荐迁移：优先使用 `Tool.api.record_* / Tool.api.infer_*`
-- 不建议继续依赖：把所有状态当单层 dict 读写；推荐改为 `record/base/misc` 分层访问
+这些能力仍可独立使用，但完整的新 session 集成属于后续阶段。

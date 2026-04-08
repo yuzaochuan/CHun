@@ -1,5 +1,14 @@
 """CHun 核心模块导出。"""
 
+from .errors import (
+    CHunError,
+    MissingDependencyError,
+    TransportCapabilityError,
+    TransportClosedError,
+    TransportConfigError,
+    TransportError,
+)
+from .models import TargetKind, TargetSpec, TransportKind, TransportSpec
 from .registry import (
     AddressClass,
     AddressRecord,
@@ -10,23 +19,27 @@ from .registry import (
     RecordSource,
     Reg,
 )
-from .target import DEFAULT_TERMINAL, TargetConfig, TargetSession, resolve_remote_mode
-from .tool import CHun, MyTool, Tool
+from .session import CHunSession, Session
 
 __all__ = [
     "AddressClass",
     "AddressRecord",
     "BaseCandidate",
     "BaseRecord",
-    "CHun",
-    "DEFAULT_TERMINAL",
-    "MyTool",
+    "CHunError",
+    "CHunSession",
+    "MissingDependencyError",
     "PwnRegistry",
     "RecordKind",
     "RecordSource",
     "Reg",
-    "TargetConfig",
-    "TargetSession",
-    "Tool",
-    "resolve_remote_mode",
+    "Session",
+    "TargetKind",
+    "TargetSpec",
+    "TransportCapabilityError",
+    "TransportClosedError",
+    "TransportConfigError",
+    "TransportError",
+    "TransportKind",
+    "TransportSpec",
 ]

@@ -2,12 +2,43 @@
 
 ## 覆盖范围
 
+- `TargetSpec`
+- `TransportSpec`
 - `RecordKind`
 - `RecordSource`
 - `AddressClass`
 - `AddressRecord`
 - `BaseCandidate`
 - `BaseRecord`
+
+## `TargetSpec`
+
+`TargetSpec` 统一描述“目标是什么”，核心字段包括：
+
+- `kind`
+- `binary`
+- `host` / `port`
+- `base_url`
+- `ws_url`
+- `argv` / `env` / `cwd`
+- `ssh_*`
+
+它的意义是让连接模式不再依赖 `remote_mode: bool`，而是显式落在数据模型里。
+
+## `TransportSpec`
+
+`TransportSpec` 统一描述“这次怎么连”，核心字段包括：
+
+- `kind`
+- `timeout`
+- `connect_timeout`
+- `headers`
+- `follow_redirects`
+- `verify`
+- `delimiter`
+- `metadata`
+
+它负责承载 transport 生命周期和协议相关配置。
 
 ## 为什么使用 `Enum`
 
@@ -22,8 +53,10 @@
 
 所以代码里既可以比较枚举成员，也能稳定输出 `value`。
 
-## 数据模型如何支撑 Registry
+## 数据模型如何支撑 Registry 与 Transport
 
+- `TargetSpec`：描述目标
+- `TransportSpec`：描述 transport 配置
 - `AddressRecord`：记录单条地址及其语义元信息
 - `BaseCandidate`：承载 `infer_base()` 的候选评分结果
 - `BaseRecord`：承载“达阈值后正式确认”的 base

@@ -1,25 +1,31 @@
 # API 总览
 
-## `Tool`
+## `CHun`
 
-职责：面向脚本作者的主入口，协调目标启动、Registry 写入、base 推导和 blind 插件挂载，并通过 `Tool.api` 提供推荐便捷接口。
+职责：统一工厂入口，按 target/transport 组合构建 `CHunSession`。
 
-详见：[Tool API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/tool.md)
+详见：[Session API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/tool.md)
+
+## `Transport`
+
+职责：统一承接连接生命周期与协议 IO。第一阶段已实现 tube / HTTP / WebSocket / blind reconnect 四类 transport。
+
+详见：[Transport API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/transport.md)
 
 ## `Reg` / `PwnRegistry`
 
-职责：统一情报中心，管理地址记录、base 记录、misc 数据，并提供推导与分类能力。
+职责：统一情报中心，管理地址记录、base 记录、misc 数据，并提供推导与分类能力。当前阶段它仍可独立使用，但尚未完整接回新的 `CHunSession`。
 
 详见：[Registry API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/registry.md)
 
-## `Blind`
+## Blind Reconnect
 
-职责：盲格式化字符串探测（自动重连、扫栈、扫字符串、offset 定位），并把结果回写 Registry。
+职责：为 blind 场景提供“一次交互一条连接”的 transport 级骨架。
 
 详见：[Blind API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/blind.md)
 
 ## 数据模型与枚举
 
-职责：为 Registry 提供稳定字段语义（`RecordKind`、`RecordSource`、`AddressClass` 等）。
+职责：提供 `TargetSpec` / `TransportSpec` 以及 Registry 相关数据模型。
 
 详见：[Models API](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/models.md)

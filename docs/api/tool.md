@@ -1,72 +1,59 @@
-# Tool API
+# Session API
 
-## 类作用
+## 顶层入口
 
-`Tool`（别名：`MyTool`、`CHun`）是门面类。它持有：
-
-- `target`：`TargetSession`，负责本地/远程 IO
-- `reg`：`PwnRegistry`，负责状态管理
-- `blind`：懒加载的 `BlindFmtTool`
-
-## 初始化参数
-
-`Tool(file_path, libc_path=None, host=None, port=None, remote_mode=False, log_level="debug", terminal=("tmux","splitw","-h"))`
-
-核心参数：
-
-- `file_path`：目标 ELF 路径
-- `libc_path`：可选 libc 路径
-- `host/port/remote_mode`：远程模式参数
-
-## 关键属性
-
-- `elf`：兼容访问 `target.elf`
-- `libc`：兼容访问 `target.libc`
-- `leaks_data`：兼容视图（地址记录平铺 + misc）
-- `api`：推荐用户接口入口（`RecommendedToolAPI`）
-
-## 关键方法
-
-- `start()`：启动本地进程或远程连接
-- `gdb()`：仅在 `args.GDB` 时 attach
-- `add_log()`：兼容写入口，自动分流地址与 misc
-- `show(verbose=False)` / `puts_log(verbose=False)`：打印 Registry 快照（默认简洁，`verbose=True` 展开元信息）
-- `classify_address()`：地址启发式分类
-- `infer_base()` / `derive_base()`：泄漏 + offset 推导 base 候选
-- `auto_search_libc()`：可选依赖 `LibcSearcher` 的自动匹配
-- `new_blind_tool()`：创建并挂载共享 Registry 的 `BlindFmtTool`
-
-## 推荐接口（`Tool.api`）
-
-`Tool.api` 暴露高频写题能力，避免主类持续膨胀。
-
-- `api.connect()`：远程连接语义化别名（等价于 `start(remote_mode=True)`）
-- `api.record_libc_symbol()` / `api.record_stack_ptr()` / `api.record_heap_ptr()`
-- `api.record_base()` / `api.record_derived()` / `api.record_note()`
-- `api.infer_libc_base_from()` / `api.infer_pie_base_from()`
-- `api.show()`：透传 `Tool.show()`
-
-## 使用示例
+当前主入口是 `CHun` 工厂，而不是旧 `Tool`。
 
 ```python
-from chun import Tool
+from chun import CHun
 
-p = Tool("./challenge", host="127.0.0.1", port=9999)
-io = p.start(remote_mode=False)
-
-# 推荐写法：通过 api 记录与推导
-p.api.record_libc_symbol("puts", 0x7F1234580000)
-ret = p.api.infer_libc_base_from("puts")
-print(ret.score)
-
-# 默认简洁快照；调试时可打开详细视图
-p.show()
-p.show(verbose=True)
-
-blind = p.new_blind_tool(io_factory=lambda: p.start(remote_mode=True), interact_func=lambda io, pl: None)
+local = CHun.process("./challenge")
+remote = CHun.remote("example.com", 31337, binary="./challenge")
+http = CHun.http("http://127.0.0.1:8000")
+ws = CHun.websocket("ws://127.0.0.1:9001")
+blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 ```
 
-## 注意事项
+## `CHunSession`
 
-- `auto_search_libc()` 依赖第三方 `LibcSearcher`，未安装会直接返回空结果
-- `leak_stack()` 仍保留但偏历史兼容，不建议作为长期主流程
+每个工厂方法都会返回一个 `CHunSession`。第一阶段它只承载 transport 相关运行时：
+
+- `target`：`TargetSpec`
+- `transport_spec`：`TransportSpec`
+- `transport`：实际 transport 实例
+- `io`：延迟打开后的 transport 访问入口
+- `raw`：底层原始连接对象
+
+## 工厂方法
+
+- `CHun.process(binary, *, argv=None, env=None, cwd=None, log_level="info")`
+- `CHun.remote(host, port, *, binary=None, timeout=None)`
+- `CHun.ssh_process(host, *, user, binary, argv=None, port=22, ...)`
+- `CHun.http(base_url, *, headers=None, timeout=None, follow_redirects=True, verify=True)`
+- `CHun.websocket(ws_url, *, headers=None, timeout=None, connect_timeout=None)`
+- `CHun.blind(connection_factory, *, timeout=None)`
+
+## 会话生命周期
+
+- `session.open()`：显式打开 transport
+- `session.close()`：关闭 transport
+- `session.reconnect()`：重建 transport
+- `session.io`：首次访问时自动打开 transport
+
+## 示例
+
+```python
+from chun import CHun
+
+p = CHun.process("./challenge")
+p.io.sendline(b"1")
+print(p.io.recvuntil(b"\n"))
+
+api = CHun.http("http://127.0.0.1:8000")
+print(api.io.request("GET", "/health"))
+```
+
+## 本阶段边界
+
+- 已完成：session/runtime 入口与 transport 组装
+- 未完成：完整 `session.rec / infer / dbg / fmt / heap / tpl` 子系统

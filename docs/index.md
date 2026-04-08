@@ -2,21 +2,21 @@
 
 ## CHun 是什么
 
-CHun 是一个以 `chun` 包为核心的 Pwn 工具库，目标是让题目脚本在“顺手写法”和“长期可维护”之间取得平衡。当前实现围绕三个核心对象展开：`Tool`、`Reg`（`PwnRegistry`）和 `Blind`。
+CHun 目前处于源码重构第一阶段。顶层入口已经从旧式 `Tool(remote_mode=...)` 切换为 `CHun` 工厂与 `CHunSession`，底层运行时围绕 `Transport` 独立成层，为后续 Evidence / Inference / Template 能力继续扩展打地基。
 
 ## 适用场景
 
-- 本地 ELF 调试与远程切换
-- 泄漏地址的统一记录与回看
-- 基于符号偏移的 base 候选推导
-- 无本地 ELF 的 blind fmt 探测
+- 本地 ELF 调试与远程服务题
+- HTTP / API / SSRF 类题目
+- WebSocket 双向消息交互
+- blind 场景下的一次性重连交互
 
 ## 当前能力边界
 
-- 已实现：`Tool.start()`、`add_log()`、`derive_base()`、`Blind` 扫栈/偏移定位
-- 已实现：`PwnRegistry` 的 typed 记录与启发式地址分类
-- Future work：`plugins/fmt.py`、`plugins/heap.py` 目前仍是占位模块
-- Future work：更深的多泄漏联合推导和自动化利用链路尚未落地
+- 已实现：`TargetSpec` / `TransportSpec` / `CHunSession`
+- 已实现：`PwntoolsTubeTransport`、`HttpxTransport`、`WebSocketTransport`、`BlindReconnectTransport`
+- 已保留：`PwnRegistry` 作为独立状态中心
+- 刻意未做：完整 Registry 重构、Inference 新系统、fmt/heap/template 主体
 
 ## 文档导航
 

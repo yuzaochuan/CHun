@@ -3,8 +3,8 @@
 ## 安装前提
 
 - Python 3.10+
-- 建议已安装 `pwntools` 运行环境（终端/调试工具链）
-- 目标二进制可本地运行，或已有远程连接参数
+- 本地 Pwn 题建议有 `pwntools` 运行环境
+- Web / WebSocket 场景建议已安装项目依赖中的 `httpx` / `websockets`
 
 ## Editable install
 
@@ -15,36 +15,60 @@ python -m pip install -e .
 ## 最小示例
 
 ```python
-from chun import Tool, Blind, Reg
+from chun import CHun
 
-p = Tool("./challenge")
-io = p.start()
-
-p.api.record_libc_symbol("puts", 0x7F1234580000)
-p.show()
+p = CHun.process("./challenge")
+p.io.sendline(b"1")
+print(p.io.recvuntil(b"\n"))
 ```
 
-## 典型工作流示例
+## 本地 / 远程 / SSH
 
 ```python
-from chun import Tool
+from chun import CHun
 
-p = Tool("./challenge", host="example.com", port=31337)
-io = p.start(remote_mode=False)  # 本地起进程
-
-# 1) 记录泄漏
-p.api.record_libc_symbol("puts", 0x7F1234580000)
-
-# 2) 推导 base
-candidate = p.api.infer_libc_base_from("puts")
-print(hex(candidate.aligned_base), candidate.score)
-
-# 3) 查看当前全局状态
-p.show()  # 默认简洁
-# p.show(verbose=True)  # 调试时看元信息
+local = CHun.process("./challenge")
+remote = CHun.remote("example.com", 31337, binary="./challenge")
+ssh_remote = CHun.ssh_process(
+    "example.com",
+    user="ctf",
+    binary="/home/ctf/challenge",
+)
 ```
 
-## 兼容层 vs 新架构入口
+## HTTP / WebSocket
 
-- 兼容层调用：`add_log()`、`leaks_data`、`my_tools.py` 导入
-- 推荐入口：`Tool` + `api.record_* / api.infer_*` + `show(verbose=...)`
+```python
+from chun import CHun
+
+http = CHun.http("http://127.0.0.1:8000")
+print(http.io.request("GET", "/health"))
+
+ws = CHun.websocket("ws://127.0.0.1:9001")
+ws.io.send_message("ping")
+print(ws.io.recv_message())
+```
+
+## Blind reconnect
+
+```python
+from chun import CHun
+
+
+def connection_factory():
+    return CHun.remote("example.com", 31337).raw
+
+
+blind = CHun.blind(connection_factory)
+result = blind.io.exchange(
+    b"%7$p",
+    receive=lambda io: io.recvuntil(b"\n"),
+    newline=True,
+)
+print(result)
+```
+
+## 当前阶段边界
+
+- 已落地：session 入口、spec 模型、四类 transport
+- 暂未重建：完整 Registry 新架构、Inference 新系统、fmt/heap/template 主体
