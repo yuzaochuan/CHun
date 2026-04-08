@@ -14,39 +14,42 @@ from typing import Any, Iterable, Iterator, Mapping
 from ..utils.display import print_registry_snapshot
 
 
+_ADD_LOG_META_KEYS = frozenset({"kind", "source", "confidence", "notes", "meta"})
+
+
 class RecordKind(str, Enum):
     """Registry 里记录项的语义类型。"""
 
-    GENERIC = "generic"
-    LEAK = "leak"
-    BASE = "base"
-    LIBC_SYMBOL = "libc-symbol"
-    PIE_RET = "pie-ret"
-    STACK_PTR = "stack"
-    HEAP_PTR = "heap"
-    FMT_OFFSET_HIT = "fmt-offset-hit"
+    GENERIC = "generic"  # 通用记录：暂未细分语义的普通条目。
+    LEAK = "leak"  # 地址泄漏：手工或脚本拿到的原始地址值。
+    BASE = "base"  # 基址记录：已经确认可作为模块基址使用的地址。
+    LIBC_SYMBOL = "libc-symbol"  # libc 符号泄漏：如 puts/system/_IO_2_1_stderr_。
+    PIE_RET = "pie-ret"  # PIE 返回地址：常见于栈泄漏里拿到的代码段返回地址。
+    STACK_PTR = "stack"  # 栈指针：明显位于栈区的地址或栈扫描命中结果。
+    HEAP_PTR = "heap"  # 堆指针：明显位于堆区的地址或堆块相关泄漏。
+    FMT_OFFSET_HIT = "fmt-offset-hit"  # FMT 偏移命中：定位到输入 offset 的结果。
 
 
 class RecordSource(str, Enum):
     """记录来源，用于追踪可信度。"""
 
-    MANUAL = "manual"
-    BLIND_FMT = "blind-fmt"
-    LOCAL_ELF = "local-elf"
-    GDB_SYNC = "gdb-sync"
-    LIBC_SEARCHER = "libc-searcher"
-    DERIVED = "derived"
+    MANUAL = "manual"  # 人工录入：脚本作者显式登记的结果。
+    BLIND_FMT = "blind-fmt"  # blind fmt：通过盲打格式化字符串探测得到。
+    LOCAL_ELF = "local-elf"  # 本地 ELF：来自本地二进制/符号表/静态信息。
+    GDB_SYNC = "gdb-sync"  # GDB 同步：调试期间人工确认后写回。
+    LIBC_SEARCHER = "libc-searcher"  # LibcSearcher：由外部库匹配得到。
+    DERIVED = "derived"  # 推导结果：由已有记录进一步计算得到。
 
 
 class AddressClass(str, Enum):
     """地址归属的启发式分类（提示用，不是绝对真相）。"""
 
-    TEXT_NON_PIE = "text-non-pie"
-    PIE_LIKE = "pie-like"
-    LIBC_LIKE = "libc-like"
-    STACK_LIKE = "stack-like"
-    HEAP_LIKE = "heap-like"
-    UNKNOWN = "unknown"
+    TEXT_NON_PIE = "text-non-pie"  # 非 PIE 代码段：典型 32 位/固定装载 text 地址。
+    PIE_LIKE = "pie-like"  # PIE 风格地址：常见于 0x55... 附近的主程序映射。
+    LIBC_LIKE = "libc-like"  # libc 风格地址：常见于 0x7f... 的共享库映射。
+    STACK_LIKE = "stack-like"  # 栈风格地址：高地址、接近用户态栈区。
+    HEAP_LIKE = "heap-like"  # 堆风格地址：常见于 0x56... 一类 heap 映射。
+    UNKNOWN = "unknown"  # 未知类型：暂时无法可靠归类的地址。
 
 
 @dataclass(slots=True)
@@ -151,17 +154,53 @@ class PwnRegistry:
         return self.add_record(record)
 
     def add_log(self, name: str | None = None, value: Any = None, **kwargs: Any) -> None:
-        """兼容历史 `my_tools.py` 风格的加记录接口。"""
+        """兼容历史 `my_tools.py` 风格的加记录接口。
+
+        兼容两类用法：
+
+        - 旧风格：`add_log("puts@libc", leak)` / `add_log(note="warmup")`
+        - 增强风格：`add_log("puts@libc", leak, kind=..., source=..., confidence=...)`
+
+        当且仅当能明确定位到“一条记录”时，`kind/source/confidence/notes/meta`
+        这些元字段才会被解释为记录元信息；其他情况仍按历史逻辑写入。
+        """
+        meta_kwargs = self._extract_add_log_meta(kwargs)
+        data_kwargs = {key: item for key, item in kwargs.items() if key not in _ADD_LOG_META_KEYS}
+
         if name is not None and value is not None:
-            self._add_any_value(str(name), value)
+            self._add_any_value(str(name), value, **meta_kwargs)
+
+        if meta_kwargs and name is None and len(data_kwargs) == 1:
+            key, item = next(iter(data_kwargs.items()))
+            self._add_any_value(key, item, **meta_kwargs)
+            return
 
         for key, item in kwargs.items():
+            if key in _ADD_LOG_META_KEYS and meta_kwargs:
+                continue
             self._add_any_value(key, item)
 
-    def _add_any_value(self, key: str, item: Any) -> None:
+    @staticmethod
+    def _extract_add_log_meta(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """从 `add_log()` 的关键字参数中提取元信息字段。"""
+        meta_kwargs: dict[str, Any] = {}
+        for key in _ADD_LOG_META_KEYS:
+            if key in kwargs:
+                meta_kwargs[key] = kwargs[key]
+        return meta_kwargs
+
+    def _add_any_value(self, key: str, item: Any, **meta_kwargs: Any) -> None:
         """整数写入地址表，其他值写入 misc。"""
         if isinstance(item, int):
-            self.add_address(name=key, value=item, kind=RecordKind.LEAK)
+            self.add_address(
+                name=key,
+                value=item,
+                kind=meta_kwargs.get("kind", RecordKind.LEAK),
+                source=meta_kwargs.get("source", RecordSource.MANUAL),
+                confidence=meta_kwargs.get("confidence", 0.50),
+                notes=meta_kwargs.get("notes", ""),
+                meta=meta_kwargs.get("meta"),
+            )
         else:
             self._misc[key] = item
 
@@ -240,6 +279,103 @@ class PwnRegistry:
 
         return AddressClass.UNKNOWN
 
+    @staticmethod
+    def _expected_base_classes(
+        leak_name: str,
+        record_kind: RecordKind,
+    ) -> set[AddressClass]:
+        """根据记录语义猜测更可能出现的基址类型。"""
+        expected = PwnRegistry._expected_base_classes_from_kind(record_kind)
+        expected.update(PwnRegistry._expected_base_classes_from_name(leak_name))
+        return expected
+
+    @staticmethod
+    def _expected_base_classes_from_kind(record_kind: RecordKind) -> set[AddressClass]:
+        """优先依据记录类型判断更可能出现的基址类型。"""
+        expected: set[AddressClass] = set()
+
+        if record_kind == RecordKind.LIBC_SYMBOL:
+            expected.add(AddressClass.LIBC_LIKE)
+
+        if record_kind == RecordKind.PIE_RET:
+            expected.update({AddressClass.PIE_LIKE, AddressClass.TEXT_NON_PIE})
+
+        if record_kind == RecordKind.STACK_PTR:
+            expected.add(AddressClass.STACK_LIKE)
+
+        if record_kind == RecordKind.HEAP_PTR:
+            expected.add(AddressClass.HEAP_LIKE)
+
+        return expected
+
+    @staticmethod
+    def _expected_base_classes_from_name(leak_name: str) -> set[AddressClass]:
+        """从键名里提取弱语义线索，只作补充，不替代 kind。"""
+        name = leak_name.lower()
+        expected: set[AddressClass] = set()
+
+        if "libc" in name:
+            expected.add(AddressClass.LIBC_LIKE)
+
+        if "pie" in name or "@elf" in name:
+            expected.update({AddressClass.PIE_LIKE, AddressClass.TEXT_NON_PIE})
+
+        if "stack" in name:
+            expected.add(AddressClass.STACK_LIKE)
+
+        if "heap" in name:
+            expected.add(AddressClass.HEAP_LIKE)
+
+        return expected
+
+    @staticmethod
+    def _source_prior(source: RecordSource) -> float:
+        """记录来源的先验可靠度。"""
+        priors = {
+            RecordSource.MANUAL: 0.02,
+            RecordSource.BLIND_FMT: 0.01,
+            RecordSource.LOCAL_ELF: 0.08,
+            RecordSource.GDB_SYNC: 0.12,
+            RecordSource.LIBC_SEARCHER: 0.05,
+            RecordSource.DERIVED: 0.04,
+        }
+        return priors.get(source, 0.02)
+
+    def _related_base_conflicts(
+        self,
+        inferred_name: str,
+        aligned_base: int,
+        expected_classes: set[AddressClass],
+        fallback_class: AddressClass,
+    ) -> tuple[int, int]:
+        """统计同类 base 中与当前候选一致/冲突的数量。"""
+        same_group_matches = 0
+        same_group_conflicts = 0
+        comparable_classes = expected_classes or {fallback_class}
+
+        for existing_name, existing in self._bases.items():
+            if existing_name == inferred_name:
+                continue
+
+            existing_class = existing.meta.get("address_class")
+            if isinstance(existing_class, str):
+                try:
+                    existing_addr_class = AddressClass(existing_class)
+                except ValueError:
+                    existing_addr_class = self.classify_address(existing.base)
+            else:
+                existing_addr_class = self.classify_address(existing.base)
+
+            if existing_addr_class not in comparable_classes:
+                continue
+
+            if existing.base == aligned_base:
+                same_group_matches += 1
+            else:
+                same_group_conflicts += 1
+
+        return same_group_matches, same_group_conflicts
+
     def infer_base(
         self,
         leak_name: str,
@@ -265,7 +401,7 @@ class PwnRegistry:
 
         inferred_name = base_name or f"{leak_name}.inferred"
         raw_base = record.value - symbol_offset
-        aligned_base = raw_base & ~(self.page_size - 1)
+        aligned_base = raw_base & ~(self.page_size - 1) if raw_base > 0 else raw_base
 
         reasons: list[str] = []
         score = 0.0
@@ -274,8 +410,36 @@ class PwnRegistry:
             score += 0.20
             reasons.append("原始 base 已按页对齐 (+0.20)")
         else:
-            score += 0.12
-            reasons.append("原始 base 向下页对齐 (+0.12)")
+            misalignment = raw_base % self.page_size
+            if misalignment <= max(0x20, self.page_size // 128):
+                score += 0.04
+                reasons.append(
+                    f"原始 base 接近页边界，轻微加分 (+0.04, misalign={misalignment:#x})"
+                )
+            elif misalignment <= max(0x100, self.page_size // 16):
+                score += 0.01
+                reasons.append(
+                    f"原始 base 有一定页对齐迹象，弱加分 (+0.01, misalign={misalignment:#x})"
+                )
+            elif misalignment >= self.page_size - max(0x80, self.page_size // 8):
+                score -= 0.04
+                reasons.append(
+                    f"原始 base 离页边界较远，轻微扣分 (-0.04, misalign={misalignment:#x})"
+                )
+            else:
+                reasons.append(
+                    f"原始 base 未严格页对齐，不额外加分 (misalign={misalignment:#x})"
+                )
+
+        if symbol_offset > record.value:
+            score -= 0.18
+            reasons.append("symbol_offset 大于泄漏值，raw_base 明显异常 (-0.18)")
+        elif raw_base <= 0:
+            score -= 0.18
+            reasons.append("推导出的 raw_base 非正数，可信度较低 (-0.18)")
+        elif raw_base < self.page_size:
+            score -= 0.10
+            reasons.append("推导出的 raw_base 过小，不像真实映射基址 (-0.10)")
 
         addr_class = self.classify_address(aligned_base)
         if addr_class in {
@@ -292,9 +456,43 @@ class PwnRegistry:
             score += 0.04
             reasons.append("地址区间未知，仅给弱先验 (+0.04)")
 
-        source_bonus = 0.10 * record.confidence
+        kind_expected_classes = self._expected_base_classes_from_kind(record.kind)
+        name_expected_classes = self._expected_base_classes_from_name(record.name)
+        expected_classes = self._expected_base_classes(record.name, record.kind)
+
+        if kind_expected_classes:
+            expected_labels = "/".join(sorted(item.value for item in kind_expected_classes))
+            if addr_class in kind_expected_classes:
+                score += 0.10
+                reasons.append(
+                    f"记录类型与候选基址类型匹配：期望 {expected_labels} (+0.10)"
+                )
+            else:
+                score -= 0.08
+                reasons.append(
+                    f"记录类型与候选基址类型不符：期望 {expected_labels} (-0.08)"
+                )
+        elif name_expected_classes:
+            expected_labels = "/".join(sorted(item.value for item in name_expected_classes))
+            if addr_class in name_expected_classes:
+                score += 0.04
+                reasons.append(
+                    f"键名语义弱匹配候选基址类型：期望 {expected_labels} (+0.04)"
+                )
+            else:
+                score -= 0.03
+                reasons.append(
+                    f"键名语义与候选基址类型偏离：期望 {expected_labels} (-0.03)"
+                )
+
+        source_prior = self._source_prior(record.source)
+        confidence_bonus = 0.08 * record.confidence
+        source_bonus = source_prior + confidence_bonus
         score += source_bonus
-        reasons.append(f"继承泄漏来源置信度 (+{source_bonus:.2f})")
+        reasons.append(
+            f"来源先验 + 置信度继承：src={record.source.value} (+{source_prior:.2f}) "
+            f"+ conf={record.confidence:.2f} (+{confidence_bonus:.2f})"
+        )
 
         existing = self.get_base(inferred_name)
         if existing is not None:
@@ -304,6 +502,21 @@ class PwnRegistry:
             else:
                 score -= 0.50
                 reasons.append("与已确认 base 冲突 (-0.50)")
+
+        related_matches, related_conflicts = self._related_base_conflicts(
+            inferred_name=inferred_name,
+            aligned_base=aligned_base,
+            expected_classes=expected_classes,
+            fallback_class=addr_class,
+        )
+        if related_matches:
+            related_bonus = min(0.18, 0.08 * related_matches)
+            score += related_bonus
+            reasons.append(f"与同类 base 保持一致 (+{related_bonus:.2f})")
+        if related_conflicts:
+            related_penalty = min(0.36, 0.18 * related_conflicts)
+            score -= related_penalty
+            reasons.append(f"与同类 base 存在冲突 (-{related_penalty:.2f})")
 
         score = _clamp_confidence(score)
         candidate = BaseCandidate(
@@ -326,6 +539,7 @@ class PwnRegistry:
                     "symbol_offset": symbol_offset,
                     "raw_base": raw_base,
                     "address_class": addr_class.value,
+                    "reasons": list(reasons),
                 },
             )
         return candidate

@@ -176,6 +176,7 @@ class MyTool:
 
         - 若值是整数，会被当作地址类信息写入 `PwnRegistry`
         - 若值不是整数，会进入 misc 区域
+        - 支持为单条地址记录补充 `kind/source/confidence/notes/meta`
 
         这样做的好处是：题目脚本可以继续保持很松的调用方式，
         但内部状态组织已经变得更统一。
@@ -210,6 +211,8 @@ class MyTool:
         leak_name: str,
         symbol_offset: int,
         base_name: str | None = None,
+        min_accept_score: float | None = None,
+        store: bool = True,
     ) -> BaseCandidate:
         """推导并按阈值决定是否写入 base。
 
@@ -222,6 +225,8 @@ class MyTool:
             leak_name=leak_name,
             symbol_offset=symbol_offset,
             base_name=base_name,
+            min_accept_score=min_accept_score,
+            store=store,
         )
 
     def derive_base(
@@ -229,16 +234,19 @@ class MyTool:
         leak_name: str,
         symbol_offset: int,
         base_name: str | None = None,
+        min_accept_score: float | None = None,
     ) -> BaseCandidate:
         """`infer_base()` 的写题友好别名。
 
         语义上更贴近“我现在就想从这个泄漏推一个 base 出来”，
         因此 README 里也更推荐使用这个名字。
         """
-        return self.reg.derive_base(
+        return self.reg.infer_base(
             leak_name=leak_name,
             symbol_offset=symbol_offset,
             base_name=base_name,
+            min_accept_score=min_accept_score,
+            store=True,
         )
 
     @staticmethod

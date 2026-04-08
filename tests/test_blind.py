@@ -56,3 +56,12 @@ def test_dump_stack_ptrs_recovers_after_crash() -> None:
     blind.dump_stack_ptrs(start_idx=1, end_idx=3)
 
     assert counter["io_factory_calls"] >= 2
+
+
+def test_offest_alias_maps_to_offset() -> None:
+    blind = BlindFmtTool(io_factory=DummyIO, interact_func=lambda _io, _payload: b"(nil)\n")
+
+    blind.offest = 7
+
+    assert blind.offset == 7
+    assert blind.offest == 7
