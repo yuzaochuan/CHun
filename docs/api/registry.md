@@ -59,6 +59,9 @@
 
 返回值：`BaseCandidate`（`raw_base/aligned_base/score/reasons`）。
 
+此外，`infer_base()` 每次执行后会刷新“最近一次推导快照”，可通过
+`show_last_infer(verbose=False)` 进行分层展示（事件流 + Infer Card + 可选调试展开）。
+
 ## 评分思想（当前实现）
 
 - 页对齐质量：已对齐加分更高
@@ -72,12 +75,35 @@
 
 `classify_address(value)` 返回 `AddressClass`，用于快速判断地址更像 `PIE/LIBC/STACK/HEAP`。这是提示能力，不是严格证明。
 
-## `puts_log(verbose=False)` 输出模式
+## `show_last_infer(verbose=False)` 输出分层
+
+Infer 展示层默认分为三层：
+
+- 事件流：`[*] / [+] / [!] / [-]` 时间线，快速说明“刚刚发生了什么”
+- Infer Card：结论卡片（target/status/leak/base/score + evidence + derived + next）
+- Debug 展开：仅 `verbose=True` 时显示，包含 `raw/aligned/address_class/threshold` 与分项评分解释
+
+状态颜色约定：
+
+- `ACCEPTED`：绿色
+- `WEAK`：黄色
+- `CONFLICT`：红色
+- `REJECTED`：灰色
+
+地址字段统一高亮为青色，派生结果字段统一为蓝色。
+
+## `puts_log(verbose=False)` 与 `show_snapshot(verbose=False)`
 
 - 默认 `verbose=False`：简洁视图，只显示核心键值
 - `verbose=True`：展开 `kind/source/confidence` 详细字段
 
-对应 `Tool.show(verbose=...)` 会透传该模式。
+`show_snapshot()` 保留为全量快照展示入口，不再作为 infer 的主输出。
+
+对应关系：
+
+- `Tool.show(verbose=...)` / `Tool.puts_log(verbose=...)` -> 快照视图
+- `Tool.show_snapshot(verbose=...)` -> 显式快照视图
+- `Tool.show_last_infer(verbose=...)` -> infer 分层视图
 
 ## `kind / source / confidence / notes / meta` 含义
 

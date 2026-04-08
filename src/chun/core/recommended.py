@@ -35,6 +35,14 @@ class RecommendedToolAPI:
         """透传到主工具的快照输出。"""
         self._tool.show(verbose=verbose)
 
+    def show_snapshot(self, verbose: bool = False) -> None:
+        """透传到主工具的快照输出（语义化别名）。"""
+        self._tool.show_snapshot(verbose=verbose)
+
+    def show_last_infer(self, verbose: bool = False) -> None:
+        """透传到主工具的 infer 分层展示。"""
+        self._tool.show_last_infer(verbose=verbose)
+
     def record_libc_symbol(
         self,
         name: str,
@@ -147,6 +155,7 @@ class RecommendedToolAPI:
         libc_sym: str | None = None,
         base_name: str = "libc",
         min_accept_score: float | None = None,
+        verbose: bool = False,
     ) -> BaseCandidate:
         """从 libc 泄漏推导 libc base。"""
         if self._tool.libc is None:
@@ -159,7 +168,7 @@ class RecommendedToolAPI:
         except Exception as exc:
             raise KeyError(f"libc 符号不存在或不可读：{symbol_name}") from exc
 
-        return self._tool.reg.infer_base(
+        candidate = self._tool.reg.infer_base(
             leak_name=record_key,
             symbol_offset=symbol_offset,
             base_name=base_name,
@@ -167,6 +176,8 @@ class RecommendedToolAPI:
             source=RecordSource.DERIVED,
             store=True,
         )
+        self._tool.reg.show_last_infer(verbose=verbose)
+        return candidate
 
     def infer_pie_base_from(
         self,
@@ -174,6 +185,7 @@ class RecommendedToolAPI:
         elf_sym: str = "main",
         base_name: str = "pie",
         min_accept_score: float | None = None,
+        verbose: bool = False,
     ) -> BaseCandidate:
         """从程序代码段泄漏推导 PIE base。"""
         if self._tool.elf is None:
@@ -185,7 +197,7 @@ class RecommendedToolAPI:
         except Exception as exc:
             raise KeyError(f"ELF 符号不存在或不可读：{elf_sym}") from exc
 
-        return self._tool.reg.infer_base(
+        candidate = self._tool.reg.infer_base(
             leak_name=record_key,
             symbol_offset=symbol_offset,
             base_name=base_name,
@@ -193,4 +205,5 @@ class RecommendedToolAPI:
             source=RecordSource.DERIVED,
             store=True,
         )
-
+        self._tool.reg.show_last_infer(verbose=verbose)
+        return candidate

@@ -11,7 +11,12 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterable, Iterator, Mapping
 
-from ..utils.display import print_registry_snapshot
+from ..utils.display import (
+    print_event_line,
+    print_infer_card,
+    print_infer_debug,
+    show_snapshot,
+)
 
 
 _ADD_LOG_META_KEYS = frozenset({"kind", "source", "confidence", "notes", "meta"})
@@ -104,6 +109,7 @@ class PwnRegistry:
         self._records: dict[str, AddressRecord] = {}
         self._bases: dict[str, BaseRecord] = {}
         self._misc: dict[str, Any] = {}
+        self._last_infer: dict[str, Any] | None = None
 
     @staticmethod
     def _coerce_kind(kind: RecordKind | str) -> RecordKind:
@@ -528,6 +534,16 @@ class PwnRegistry:
         )
 
         threshold = min_accept_score if min_accept_score is not None else self.accept_score
+        self._last_infer = {
+            "leak_name": leak_name,
+            "leak_value": record.value,
+            "base_name": inferred_name,
+            "candidate": candidate,
+            "threshold": threshold,
+            "address_class": addr_class.value,
+            "source": record.source.value,
+            "confidence": record.confidence,
+        }
         if store and score >= threshold:
             self.add_base(
                 name=inferred_name,
@@ -566,6 +582,10 @@ class PwnRegistry:
         默认展示简洁信息，减少日常打题时的视觉负担；
         当 `verbose=True` 时再展开显示元信息细节。
         """
+        self.show_snapshot(verbose=verbose)
+
+    def show_snapshot(self, verbose: bool = False) -> None:
+        """显示全量 Registry 快照。"""
         address_rows = [
             (
                 record.name,
@@ -582,7 +602,69 @@ class PwnRegistry:
         ]
         misc_rows = list(self._misc.items())
 
-        print_registry_snapshot(address_rows, base_rows, misc_rows, verbose=verbose)
+        show_snapshot(address_rows, base_rows, misc_rows, verbose=verbose)
+
+    def show_last_infer(self, verbose: bool = False) -> None:
+        """显示最近一次 infer 的三层结果：事件流、Infer Card、调试展开。"""
+        snapshot = self._last_infer
+        if snapshot is None:
+            print_event_line("warning", "当前还没有可展示的 infer 结果。")
+            return
+
+        candidate: BaseCandidate = snapshot["candidate"]
+        threshold = float(snapshot["threshold"])
+        leak_name = str(snapshot["leak_name"])
+        leak_value = int(snapshot["leak_value"])
+        base_name = str(snapshot["base_name"])
+        address_class = str(snapshot["address_class"])
+
+        print_event_line("info", f"推导 {base_name} base...")
+        print_event_line("success", f"命中泄漏 {leak_name}: {leak_value:#x}")
+        if candidate.score >= threshold:
+            print_event_line(
+                "success",
+                f"推导成功: {candidate.aligned_base:#x} (score={candidate.score:.2f})",
+            )
+        elif candidate.score >= max(0.0, threshold - 0.10):
+            print_event_line(
+                "warning",
+                f"弱接受候选: {candidate.aligned_base:#x} (score={candidate.score:.2f})",
+            )
+        else:
+            print_event_line(
+                "error",
+                f"候选未过阈值: {candidate.aligned_base:#x} (score={candidate.score:.2f})",
+            )
+
+        derived_rows = [
+            (record.name, record.value)
+            for record in self._records.values()
+            if record.source == RecordSource.DERIVED
+            and record.kind != RecordKind.BASE
+            and record.name != leak_name
+            and record.value > 0
+        ]
+        print_infer_card(
+            target=base_name,
+            leak_name=leak_name,
+            leak_value=leak_value,
+            base_name=f"{base_name}_base",
+            candidate_base=candidate.aligned_base,
+            score=candidate.score,
+            threshold=threshold,
+            reasons=candidate.reasons,
+            derived_rows=derived_rows,
+        )
+        if verbose:
+            print_infer_debug(
+                raw_base=candidate.raw_base,
+                aligned_base=candidate.aligned_base,
+                address_class=address_class,
+                threshold=threshold,
+                source=str(snapshot["source"]),
+                confidence=float(snapshot["confidence"]),
+                reasons=candidate.reasons,
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """导出当前快照为普通字典，便于序列化/调试。"""
