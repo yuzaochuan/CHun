@@ -38,6 +38,7 @@ from .core import (
     TransportSpec,
 )
 from .facade import CHun
+from .script import ScriptEntry
 from .transports import (
     BlindReconnectTransport,
     HttpxTransport,
@@ -80,6 +81,7 @@ __all__ = [
     "ResolveService",
     "ResolvedSymbolResult",
     "ResolverError",
+    "ScriptEntry",
     "TargetSpec",
     "TransportCapabilityError",
     "TransportClosedError",

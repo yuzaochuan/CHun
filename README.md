@@ -7,6 +7,7 @@ CHun 当前已进入第三轮收口阶段：在前两轮的 transport + registry
 ## 核心特性
 
 - 会话入口：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()`
+- 脚本模式入口：`CHun.script()`，保留人工写 exp 时的快速切换手感
 - Web 方向 transport：`CHun.http()` / `CHun.websocket()`
 - Blind transport：`CHun.blind()` + `BlindReconnectTransport`
 - 会话内统一事实层：`session.registry` / `session.rec`
@@ -16,6 +17,7 @@ CHun 当前已进入第三轮收口阶段：在前两轮的 transport + registry
 ## 当前稳定公开接口
 
 - 顶层工厂：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()` / `CHun.http()` / `CHun.websocket()` / `CHun.blind()`
+- 脚本 facade：`CHun.script()`
 - 会话入口：`session.io` / `session.registry` / `session.rec` / `session.infer`
 - 调试与解析：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
 
@@ -51,6 +53,41 @@ print(resp)
 
 ws.io.send_message("ping")
 print(ws.io.recv_message())
+```
+
+## 脚本模式 facade
+
+显式工厂适合自动化、模板和 agent；`CHun.script()` 只给人工写 exp 时保留快速切换手感。
+
+初始化时会顺手完成：
+
+- `context.log_level` / `context.terminal`
+- `t.elf = context.binary = ELF(binary, checksec=False)`
+- `t.libc = ELF(libc, checksec=False)`，未显式传入时会尝试从 `t.elf.libc` 自动拿
+
+```python
+from chun import CHun
+from pwn import *
+
+t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
+s = t.start()
+io = t.io
+
+t.gdb("""
+b *main
+c
+""")
+
+io.sendlineafter(b"menu> ", b"1")
+```
+
+命令行切换方式：
+
+```bash
+python exp.py
+python exp.py GDB
+python exp.py REMOTE
+python exp.py REMOTE GDB
 ```
 
 ## Blind reconnect 示例

@@ -27,6 +27,7 @@ print(hex(result.aligned_base))
 
 - `CHun.process()` / `CHun.remote()` / `CHun.ssh_process()`
 - `CHun.http()` / `CHun.websocket()` / `CHun.blind()`
+- `CHun.script()`：面向人工写 exp 的薄 facade
 - `session.io` / `session.registry` / `session.rec` / `session.infer`
 - `session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
 
@@ -46,6 +47,37 @@ ssh_remote = CHun.ssh_process(
 io = remote.io
 io.sendlineafter(b"menu> ", b"1")
 print(io.recvuntil(b"\n"))
+```
+
+## 脚本模式快速切换
+
+显式工厂适合模板、自动化和明确调用路径；`CHun.script()` 适合手写 exp 时保留 `start()` / `gdb()` 的旧手感。
+
+初始化时还会默认准备：
+
+- `context.log_level` / `context.terminal`
+- `t.elf = context.binary`
+- `t.libc`，若未显式传入则尝试从 `t.elf.libc` 自动获取
+
+```python
+from chun import CHun
+from pwn import *
+
+t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
+s = t.start()
+io = t.io
+
+t.gdb("b *main\nc")
+io.sendlineafter(b"menu> ", b"1")
+```
+
+支持的命令行模式：
+
+```bash
+python exp.py
+python exp.py GDB
+python exp.py REMOTE
+python exp.py REMOTE GDB
 ```
 
 ## HTTP / WebSocket

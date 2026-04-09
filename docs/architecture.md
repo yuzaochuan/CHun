@@ -120,3 +120,12 @@
 - bridge / workflow：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
 
 不再把重复别名当作长期公开接口，例如旧的 `CHun.binary`、`Registry`、`Session` 不再作为推荐入口保留。
+
+---
+
+维护者说明：
+
+- facade 层当前采用“双层接口”策略：公开层保留人类友好的显式工厂，内部层统一收敛到 `TargetSpec` / `TransportSpec` builder
+- `CHun.from_specs()` 是显式工厂与 `CHun.script()` 的共同装配入口
+- `CHun.script()` 属于脚本态 convenience facade，不引入第二套 transport / debug / resolve 架构
+- 后续如果 target 或 transport 默认字段发生变化，应优先修改 facade 内部 builder，避免在显式工厂和 script facade 中分别维护
