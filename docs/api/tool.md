@@ -31,7 +31,9 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 
 - `start()`：根据 `args.REMOTE` 选择本地 `process` 或远程 `remote`
 - `gdb(script="")`：根据 `args.GDB` 决定是否调用现有 `session.dbg.attach()`
-- `session` / `io`：暴露当前已启动 session 与 io
+- 显式挂出 `rec` / `infer` / `resolve` / `dbg` / `crash` 等 session 核心能力
+- 显式挂出 `sendlineafter()` / `recvline()` / `interactive()` 以及 `sla()` / `rl()` / `ia()` 等高频方法
+- `session` / `io`：保留为底层出口
 
 显式工厂与 `CHun.script()` 在内部都会先收敛到同一套 `TargetSpec` / `TransportSpec` builder，再交给 `from_specs()` 组装 session。
 
@@ -83,9 +85,10 @@ from chun import CHun
 from pwn import *
 
 t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
-s = t.start()
-io = t.io
+t.start()
 
+t.sla(b"menu> ", b"1")
+t.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
 t.gdb("b *main\nc")
 ```
 
@@ -96,7 +99,9 @@ t.gdb("b *main\nc")
 - 传 `GDB` 且当前 session 是本地 process 时，`t.gdb()` 调用现有 `session.dbg.attach()`
 - `REMOTE GDB` 时只 warning，不会 attach
 - `t.target` 是当前脚本入口使用的 `TargetSpec` 配置对象
-- `resolve` / `crash` / `gdb_mi` 仍然通过 `t.session.resolve`、`t.session.crash`、`t.session.gdb_mi` 使用
+- `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 会显式转发到当前 session
+- 高频交互方法可直接使用 `t.sendlineafter()` / `t.recvline()` / `t.interactive()` 及其 alias
+- 低频 tube 方法通过 `__getattr__` fallback 到 `t.io`
 
 ---
 

@@ -58,17 +58,20 @@ print(io.recvuntil(b"\n"))
 - `context.log_level` / `context.terminal`
 - `t.elf = context.binary`
 - `t.libc`，若未显式传入则尝试从 `t.elf.libc` 自动获取
+- `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力的显式入口
+- `t.sla()` / `t.rl()` / `t.ia()` 等高频交互方法与 alias
+- 低频 tube 方法可继续通过 fallback 使用，例如 `t.clean()`
 
 ```python
 from chun import CHun
 from pwn import *
 
 t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
-s = t.start()
-io = t.io
+t.start()
 
 t.gdb("b *main\nc")
-io.sendlineafter(b"menu> ", b"1")
+t.sla(b"menu> ", b"1")
+t.resolve
 ```
 
 支持的命令行模式：

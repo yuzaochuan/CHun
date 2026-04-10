@@ -6,8 +6,13 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Sequence
 
 from ._compat import ELF, args, context, log
+from .bridges.gdb import PwntoolsGdbBridge
+from .core.analysis import CorefileAnalyzer
 from .core.errors import TransportConfigError
+from .core.inference import InferenceService
 from .core.models import TargetSpec
+from .core.registry import EvidenceRegistry
+from .core.resolve import ResolveService
 
 if TYPE_CHECKING:
     from .core.session import CHunSession
@@ -36,7 +41,7 @@ class ScriptEntry:
     ) -> None:
         self._factory = factory
         resolved_terminal = tuple(terminal) if terminal else DEFAULT_SCRIPT_TERMINAL
-        self.target = self._factory._build_process_target(
+        self._target = self._factory._build_process_target(
             binary,
             argv=argv,
             libc=libc,
@@ -46,11 +51,11 @@ class ScriptEntry:
             log_level=log_level,
             terminal=resolved_terminal,
         )
-        self.target.host = host
-        self.target.port = port
+        self._target.host = host
+        self._target.port = port
         self.timeout = timeout
-        self.elf: Any = None
-        self.libc: Any = None
+        self._elf: Any = None
+        self._libc: Any = None
         self._session: CHunSession | None = None
         self._initialize_script_context()
 
@@ -63,8 +68,8 @@ class ScriptEntry:
         if self.target.binary is None:
             raise TransportConfigError("CHun.script(...) 需要提供 binary。")
 
-        self.elf = context.binary = ELF(self.target.binary, checksec=False)
-        self.libc = self._load_libc()
+        self._elf = context.binary = ELF(self.target.binary, checksec=False)
+        self._libc = self._load_libc()
 
     def _load_libc(self) -> Any:
         libc_path = self.target.libc
@@ -105,13 +110,13 @@ class ScriptEntry:
         return self._factory.from_specs(target, transport)
 
     def start(self) -> "CHunSession":
-        """根据 pwntools args 选择本地或远程 session。"""
+        """启动并缓存当前脚本对应的 `CHunSession`。"""
         if self._session is None:
             self._session = self._build_session()
         return self._session
 
     def gdb(self, script: str = "") -> object | None:
-        """仅在本地 process 且传入 GDB 参数时 attach。"""
+        """在 `GDB` 模式下对本地 process session 执行 attach。"""
         if not args.GDB:
             return None
 
@@ -123,15 +128,117 @@ class ScriptEntry:
 
     @property
     def session(self) -> "CHunSession":
-        """返回当前已启动 session。"""
+        """返回当前已启动的 session，用于访问完整框架能力。"""
         if self._session is None:
             raise RuntimeError("ScriptEntry 尚未启动，请先调用 start()。")
         return self._session
 
     @property
     def io(self) -> Any:
-        """暴露当前 session 的 io。"""
+        """返回当前 session 的 `io` 入口，适合直接做 tube 交互。"""
         return self.session.io
+
+    @property
+    def target(self) -> TargetSpec:
+        """返回脚本入口缓存的 `TargetSpec` 配置。"""
+        return self._target
+
+    @property
+    def elf(self) -> Any:
+        """返回脚本初始化时加载的主程序 `ELF` 对象。"""
+        return self._elf
+
+    @property
+    def libc(self) -> Any:
+        """返回脚本初始化时解析出的 libc `ELF` 对象。"""
+        return self._libc
+
+    @property
+    def rec(self) -> EvidenceRegistry:
+        """访问 session 的事实记录入口，常用于记录 leak 和 context。"""
+        return self.session.rec
+
+    @property
+    def infer(self) -> InferenceService:
+        """访问 session 的最小 inference 服务。"""
+        return self.session.infer
+
+    @property
+    def resolve(self) -> ResolveService:
+        """访问 session 的解析服务，用于符号、DynELF 等推导。"""
+        return self.session.resolve
+
+    @property
+    def dbg(self) -> PwntoolsGdbBridge:
+        """访问 session 的交互式 GDB bridge。"""
+        return self.session.dbg
+
+    @property
+    def crash(self) -> CorefileAnalyzer:
+        """访问 session 的 core dump / crash 分析入口。"""
+        return self.session.crash
+
+    def send(self, data: bytes) -> None:
+        """转发到当前 `io.send()`。"""
+        self.io.send(data)
+
+    def sendline(self, data: bytes) -> None:
+        """转发到当前 `io.sendline()`。"""
+        self.io.sendline(data)
+
+    def sendafter(self, delim: bytes, data: bytes) -> None:
+        """转发到当前 `io.sendafter()`。"""
+        self.io.sendafter(delim, data)
+
+    def sendlineafter(self, delim: bytes, data: bytes) -> None:
+        """转发到当前 `io.sendlineafter()`。"""
+        self.io.sendlineafter(delim, data)
+
+    def recv(self, n: int = 4096) -> bytes:
+        """转发到当前 `io.recv()`。"""
+        return self.io.recv(n)
+
+    def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
+        """转发到当前 `io.recvuntil()`。"""
+        return self.io.recvuntil(delim, drop=drop)
+
+    def recvline(self, keepends: bool = True) -> bytes:
+        """转发到当前 `io.recvline()`。"""
+        return self.io.recvline(keepends=keepends)
+
+    def interactive(self) -> None:
+        """转发到当前 `io.interactive()`。"""
+        self.io.interactive()
+
+    def sl(self, data: bytes) -> None:
+        """`sendline()` 的快捷别名。"""
+        self.sendline(data)
+
+    def sa(self, delim: bytes, data: bytes) -> None:
+        """`sendafter()` 的快捷别名。"""
+        self.sendafter(delim, data)
+
+    def sla(self, delim: bytes, data: bytes) -> None:
+        """`sendlineafter()` 的快捷别名。"""
+        self.sendlineafter(delim, data)
+
+    def ru(self, delim: bytes, drop: bool = False) -> bytes:
+        """`recvuntil()` 的快捷别名。"""
+        return self.recvuntil(delim, drop=drop)
+
+    def rl(self, keepends: bool = True) -> bytes:
+        """`recvline()` 的快捷别名。"""
+        return self.recvline(keepends=keepends)
+
+    def ia(self) -> None:
+        """`interactive()` 的快捷别名。"""
+        self.interactive()
+
+    def __getattr__(self, name: str) -> Any:
+        """将未显式声明的低频方法兜底转发到当前 `io`。"""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self.io, name)
 
 
 __all__ = ["ScriptEntry"]

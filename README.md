@@ -64,21 +64,24 @@ print(ws.io.recv_message())
 - `context.log_level` / `context.terminal`
 - `t.elf = context.binary = ELF(binary, checksec=False)`
 - `t.libc = ELF(libc, checksec=False)`，未显式传入时会尝试从 `t.elf.libc` 自动拿
+- `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力会作为显式 facade 暴露
+- `t.sla()` / `t.rl()` / `t.ia()` 等高频 tube 方法和 alias 可直接调用
+- 低频 tube 方法仍可通过 fallback 使用，例如 `t.clean()`
 
 ```python
 from chun import CHun
 from pwn import *
 
 t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
-s = t.start()
-io = t.io
+t.start()
 
 t.gdb("""
 b *main
 c
 """)
 
-io.sendlineafter(b"menu> ", b"1")
+t.sla(b"menu> ", b"1")
+t.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
 ```
 
 命令行切换方式：

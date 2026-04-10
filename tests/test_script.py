@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,13 +27,53 @@ class DummyDbg:
 
 
 @dataclass
+class DummyIO:
+    calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = field(default_factory=list)
+
+    def send(self, data: bytes) -> None:
+        self.calls.append(("send", (data,), {}))
+
+    def sendline(self, data: bytes) -> None:
+        self.calls.append(("sendline", (data,), {}))
+
+    def sendafter(self, delim: bytes, data: bytes) -> None:
+        self.calls.append(("sendafter", (delim, data), {}))
+
+    def sendlineafter(self, delim: bytes, data: bytes) -> None:
+        self.calls.append(("sendlineafter", (delim, data), {}))
+
+    def recv(self, n: int = 4096) -> bytes:
+        self.calls.append(("recv", (n,), {}))
+        return b"recv"
+
+    def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
+        self.calls.append(("recvuntil", (delim,), {"drop": drop}))
+        return b"until"
+
+    def recvline(self, keepends: bool = True) -> bytes:
+        self.calls.append(("recvline", (), {"keepends": keepends}))
+        return b"line\n" if keepends else b"line"
+
+    def interactive(self) -> None:
+        self.calls.append(("interactive", (), {}))
+
+    def clean(self) -> bytes:
+        self.calls.append(("clean", (), {}))
+        return b"clean"
+
+
+@dataclass
 class DummySession:
     kind: str
-    io: object = field(default_factory=object)
+    io: DummyIO = field(default_factory=DummyIO)
     dbg: DummyDbg = field(default_factory=DummyDbg)
 
     def __post_init__(self) -> None:
         self.target = type("Target", (), {"kind": self.kind})()
+        self.rec = SimpleNamespace(name="rec")
+        self.infer = SimpleNamespace(name="infer")
+        self.resolve = SimpleNamespace(name="resolve")
+        self.crash = SimpleNamespace(name="crash")
 
 
 @dataclass
@@ -129,6 +170,11 @@ def test_script_start_uses_process_by_default(
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout is None
+    assert entry.rec is session.rec
+    assert entry.infer is session.infer
+    assert entry.resolve is session.resolve
+    assert entry.dbg is session.dbg
+    assert entry.crash is session.crash
 
 
 def test_script_start_uses_remote_when_remote_flag_is_set(
@@ -238,6 +284,9 @@ def test_script_session_property_requires_start(
     with pytest.raises(RuntimeError):
         _ = entry.session
 
+    with pytest.raises(RuntimeError):
+        _ = entry.rec
+
 
 def test_script_uses_explicit_libc_when_provided(
     monkeypatch: pytest.MonkeyPatch,
@@ -254,3 +303,78 @@ def test_script_uses_explicit_libc_when_provided(
         ("./challenge", False),
         ("./libc.so.6", False),
     ]
+
+
+def test_script_explicit_io_methods_and_aliases_forward_to_io(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(cls: type[CHun], target: TargetSpec, transport: Any) -> DummySession:
+        assert target.kind == "process"
+        assert transport.kind == "pwntools-tube"
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge")
+    entry.start()
+
+    entry.send(b"A")
+    entry.sendline(b"B")
+    entry.sendafter(b":", b"C")
+    entry.sendlineafter(b">", b"D")
+    assert entry.recv(32) == b"recv"
+    assert entry.recvuntil(b"!", drop=True) == b"until"
+    assert entry.recvline(keepends=False) == b"line"
+    entry.interactive()
+
+    entry.sl(b"E")
+    entry.sa(b"name", b"F")
+    entry.sla(b"menu", b"G")
+    assert entry.ru(b"done") == b"until"
+    assert entry.rl() == b"line\n"
+    entry.ia()
+
+    assert session.io.calls == [
+        ("send", (b"A",), {}),
+        ("sendline", (b"B",), {}),
+        ("sendafter", (b":", b"C"), {}),
+        ("sendlineafter", (b">", b"D"), {}),
+        ("recv", (32,), {}),
+        ("recvuntil", (b"!",), {"drop": True}),
+        ("recvline", (), {"keepends": False}),
+        ("interactive", (), {}),
+        ("sendline", (b"E",), {}),
+        ("sendafter", (b"name", b"F"), {}),
+        ("sendlineafter", (b"menu", b"G"), {}),
+        ("recvuntil", (b"done",), {"drop": False}),
+        ("recvline", (), {"keepends": True}),
+        ("interactive", (), {}),
+    ]
+
+
+def test_script_getattr_falls_back_to_io_only(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(cls: type[CHun], target: TargetSpec, transport: Any) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge")
+    entry.start()
+
+    assert entry.clean() == b"clean"
+    assert session.io.calls == [("clean", (), {})]
+
+    with pytest.raises(AttributeError):
+        _ = entry._hidden
