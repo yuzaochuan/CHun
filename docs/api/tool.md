@@ -115,6 +115,7 @@ t.gdb("b *main\nc")
 - `session.reconnect()`：重建 transport
 - `session.io`：首次访问时自动打开 transport
 - pwntools 场景下可直接使用 `session.io.sendlineafter()` / `session.io.interactive()`
+- pwntools 场景下，未显式列出的常用 `tube` 方法也会透传，例如 `session.io.recvline()`
 - `session.rec`：记录 observation / fact / artifact / context
 - `session.infer`：执行最小 inference 闭环
 - `session.dbg`：attach / gdbscript / 基本命令

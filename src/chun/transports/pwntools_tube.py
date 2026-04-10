@@ -99,6 +99,13 @@ class PwntoolsTubeTransport(BaseTransport):
     def raw(self) -> Any:
         return self._tube
 
+    def __getattr__(self, name: str) -> Any:
+        """将未显式声明的常用 tube 方法透传到底层 pwntools 对象。"""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        self._require_open()
+        return getattr(self._tube, name)
+
     def send(self, data: bytes) -> None:
         self._require_open()
         self._tube.send(data)

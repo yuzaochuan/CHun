@@ -22,6 +22,7 @@ CHun 第一阶段把连接层独立为 transport。上层统一通过 `session.i
 说明：
 
 - `session.io` 现在可以直接走常见的 pwntools 风格交互，不必先退回 `session.raw`
+- 未显式列出的常用 `tube` 方法会自动透传到底层 pwntools 对象，例如 `recvline()`
 
 ## `HttpxTransport`
 

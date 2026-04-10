@@ -18,6 +18,7 @@ class DummyTube:
     interactive_calls: int = 0
     closed: bool = False
     recvuntil_calls: list[bytes] = field(default_factory=list)
+    recvline_calls: int = 0
 
     def send(self, data: bytes) -> None:
         self.sent.append(data)
@@ -43,6 +44,12 @@ class DummyTube:
             return payload
         end = index if drop else index + len(delim)
         return payload[:end]
+
+    def recvline(self, keepends: bool = True) -> bytes:
+        self.recvline_calls += 1
+        if keepends:
+            return self.recv_data
+        return self.recv_data.rstrip(b"\n")
 
     def interactive(self) -> None:
         self.interactive_calls += 1
@@ -113,6 +120,24 @@ def test_pwntools_tube_transport_supports_sendafter_helpers(
 
     assert dummy.recvuntil_calls == [b"name:", b"menu>"]
     assert dummy.sent == [b"AAAA", b"1\n"]
+
+
+def test_pwntools_tube_transport_passthroughs_other_tube_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dummy = DummyTube(recv_data=b"line\n")
+
+    def fake_remote(host: str, port: int, timeout: float | None = None) -> DummyTube:
+        assert (host, port, timeout) == ("example.com", 31337, None)
+        return dummy
+
+    monkeypatch.setattr(tube_mod, "remote", fake_remote)
+
+    session = CHun.remote("example.com", 31337)
+    io = session.io
+
+    assert io.recvline() == b"line\n"
+    assert dummy.recvline_calls == 1
 
 
 def test_pwntools_tube_transport_supports_ssh_process(monkeypatch: pytest.MonkeyPatch) -> None:
