@@ -68,7 +68,9 @@ class PwntoolsTubeTransport(BaseTransport):
     def _open_ssh_process(self) -> Any:
         ssh_host = self.target.ssh_host or self.target.host
         if ssh_host is None or self.target.ssh_user is None:
-            raise TransportConfigError("ssh.process 模式必须提供 ssh_host 和 ssh_user。")
+            raise TransportConfigError(
+                "ssh.process 模式必须提供 ssh_host 和 ssh_user。"
+            )
 
         argv = list(self.target.argv)
         if not argv:
@@ -85,7 +87,9 @@ class PwntoolsTubeTransport(BaseTransport):
             key_password=self.target.ssh_key_password,
             cache=False,
         )
-        return self._ssh_client.process(argv, env=self.target.env or None, cwd=self.target.cwd)
+        return self._ssh_client.process(
+            argv, env=self.target.env or None, cwd=self.target.cwd
+        )
 
     def _close(self) -> None:
         if self._tube is not None and hasattr(self._tube, "close"):

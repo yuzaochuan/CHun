@@ -27,7 +27,9 @@ def build_transport(target: TargetSpec, spec: TransportSpec) -> BaseTransport:
 
     if spec.kind == "websocket":
         if target.kind != "websocket":
-            raise TransportConfigError("websocket transport 只能绑定 websocket target。")
+            raise TransportConfigError(
+                "websocket transport 只能绑定 websocket target。"
+            )
         return WebSocketTransport(target, spec)
 
     if spec.kind == "blind-reconnect":

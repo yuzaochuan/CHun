@@ -4,7 +4,11 @@ from chun import CHun, CHunSession
 from chun.core.inference import InferenceService
 from chun.core.models import FactKind, RecordDomain, TargetSpec, TransportSpec
 from chun.core.registry import EvidenceRegistry
-from chun.transports import BlindReconnectTransport, HttpxTransport, PwntoolsTubeTransport
+from chun.transports import (
+    BlindReconnectTransport,
+    HttpxTransport,
+    PwntoolsTubeTransport,
+)
 
 
 class DummyTransport:

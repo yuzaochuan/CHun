@@ -21,8 +21,7 @@ from ..core.registry import EvidenceRegistry
 class InteractFunc(Protocol):
     """盲打交互函数协议。"""
 
-    def __call__(self, io_obj: Any, payload: bytes) -> bytes | None:
-        ...
+    def __call__(self, io_obj: Any, payload: bytes) -> bytes | None: ...
 
 
 class BlindFmtTool:

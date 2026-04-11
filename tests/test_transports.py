@@ -4,11 +4,11 @@ from dataclasses import dataclass, field
 
 import pytest
 
+import chun.transports.pwntools_tube as tube_mod
 from chun import CHun
 from chun.core.errors import TransportCapabilityError, TransportConfigError
 from chun.core.models import TargetSpec, TransportSpec
 from chun.transports import BlindReconnectTransport, build_transport
-import chun.transports.pwntools_tube as tube_mod
 
 
 @dataclass
@@ -66,25 +66,35 @@ def test_build_transport_rejects_invalid_pairing() -> None:
         )
 
 
-def test_pwntools_tube_transport_supports_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pwntools_tube_transport_supports_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     created: list[dict[str, object]] = []
     dummy = DummyTube()
 
-    def fake_process(argv: list[str], env: dict[str, str] | None, cwd: str | None) -> DummyTube:
+    def fake_process(
+        argv: list[str], env: dict[str, str] | None, cwd: str | None
+    ) -> DummyTube:
         created.append({"argv": argv, "env": env, "cwd": cwd})
         return dummy
 
     monkeypatch.setattr(tube_mod, "process", fake_process)
 
-    session = CHun.process("./challenge", argv=["./challenge", "--fast"], env={"A": "1"}, cwd="/tmp")
+    session = CHun.process(
+        "./challenge", argv=["./challenge", "--fast"], env={"A": "1"}, cwd="/tmp"
+    )
     io = session.io
 
     io.sendline(b"ping")
-    assert created == [{"argv": ["./challenge", "--fast"], "env": {"A": "1"}, "cwd": "/tmp"}]
+    assert created == [
+        {"argv": ["./challenge", "--fast"], "env": {"A": "1"}, "cwd": "/tmp"}
+    ]
     assert dummy.sent == [b"ping\n"]
 
 
-def test_pwntools_tube_transport_supports_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pwntools_tube_transport_supports_remote(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     created: list[tuple[str, int, float | None]] = []
     dummy = DummyTube(recv_data=b"pong")
 
@@ -140,12 +150,16 @@ def test_pwntools_tube_transport_passthroughs_other_tube_methods(
     assert dummy.recvline_calls == 1
 
 
-def test_pwntools_tube_transport_supports_ssh_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pwntools_tube_transport_supports_ssh_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[dict[str, object]] = []
     dummy = DummyTube()
 
     class DummySSHClient:
-        def process(self, argv: list[str], env: dict[str, str] | None, cwd: str | None) -> DummyTube:
+        def process(
+            self, argv: list[str], env: dict[str, str] | None, cwd: str | None
+        ) -> DummyTube:
             calls.append({"argv": argv, "env": env, "cwd": cwd})
             return dummy
 
@@ -185,7 +199,9 @@ def test_httpx_transport_manages_client_lifecycle() -> None:
         def __init__(self) -> None:
             self.closed = False
 
-        def request(self, method: str, path: str, **kwargs: object) -> dict[str, object]:
+        def request(
+            self, method: str, path: str, **kwargs: object
+        ) -> dict[str, object]:
             calls.append((method, path, kwargs))
             return {"ok": True, "path": path}
 
@@ -284,7 +300,9 @@ def test_blind_reconnect_transport_supports_custom_run() -> None:
 def test_blind_reconnect_transport_rejects_plain_recv() -> None:
     transport = BlindReconnectTransport(
         TargetSpec(kind="blind"),
-        TransportSpec(kind="blind-reconnect", metadata={"connection_factory": lambda: DummyTube()}),
+        TransportSpec(
+            kind="blind-reconnect", metadata={"connection_factory": lambda: DummyTube()}
+        ),
     )
     transport.open()
 

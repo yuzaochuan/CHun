@@ -51,16 +51,18 @@ class BlindReconnectTransport(BaseTransport):
         )
 
     def interactive(self) -> None:
-        raise TransportCapabilityError(
-            "BlindReconnectTransport 不支持 interactive()。"
-        )
+        raise TransportCapabilityError("BlindReconnectTransport 不支持 interactive()。")
 
     def _spawn_connection(self) -> tuple[Any, Callable[[], None]]:
         self._require_open()
         connection_factory = self.spec.metadata["connection_factory"]
         created = connection_factory()
 
-        if hasattr(created, "open") and hasattr(created, "close") and hasattr(created, "raw"):
+        if (
+            hasattr(created, "open")
+            and hasattr(created, "close")
+            and hasattr(created, "raw")
+        ):
             created.open()
             raw = created.raw
 
