@@ -31,7 +31,7 @@ class CHun:
         ld: str | None = None,
         env: dict[str, str] | None = None,
         cwd: str | None = None,
-        log_level: str = "info",
+        log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> TargetSpec:
         return TargetSpec(
@@ -56,7 +56,7 @@ class CHun:
         *,
         binary: str | None = None,
         libc: str | None = None,
-        log_level: str = "info",
+        log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> TargetSpec:
         return TargetSpec(
@@ -85,7 +85,7 @@ class CHun:
         key_password: str | None = None,
         env: dict[str, str] | None = None,
         cwd: str | None = None,
-        log_level: str = "info",
+        log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> TargetSpec:
         return TargetSpec(
@@ -119,7 +119,9 @@ class CHun:
         return TargetSpec(kind="blind")
 
     @staticmethod
-    def _build_pwntools_tube_transport(*, timeout: float | None = None) -> TransportSpec:
+    def _build_pwntools_tube_transport(
+        *, timeout: float | None = None
+    ) -> TransportSpec:
         return TransportSpec(kind="pwntools-tube", timeout=timeout)
 
     @staticmethod
@@ -217,7 +219,7 @@ class CHun:
         binary: str | None = None,
         libc: str | None = None,
         timeout: float | None = None,
-        log_level: str = "info",
+        log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> CHunSession:
         target = cls._build_remote_target(
@@ -332,7 +334,7 @@ class CHun:
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout: float | None = None,
-        log_level: str = "info",
+        log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> ScriptEntry:
         """返回面向手写 exp 的薄 facade。"""

@@ -36,7 +36,7 @@ class ScriptEntry:
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout: float | None = None,
-        log_level: str = "info",
+        log_level: str = "debug",
         terminal: Sequence[str] = ("tmux", "splitw", "-h"),
     ) -> None:
         self._factory = factory
@@ -60,7 +60,7 @@ class ScriptEntry:
         self._initialize_script_context()
 
     def _initialize_script_context(self) -> None:
-        log_level = self.target.metadata.get("log_level", "info")
+        log_level = self.target.metadata.get("log_level", "debug")
         terminal = self.target.metadata.get("terminal", list(DEFAULT_SCRIPT_TERMINAL))
         context.log_level = str(log_level)
         context.terminal = list(terminal)
@@ -68,7 +68,8 @@ class ScriptEntry:
         if self.target.binary is None:
             raise TransportConfigError("CHun.script(...) 需要提供 binary。")
 
-        self._elf = context.binary = ELF(self.target.binary, checksec=False)
+        self._elf = ELF(self.target.binary, checksec=False)
+        context._tls["binary"] = self._elf
         self._libc = self._load_libc()
 
     def _load_libc(self) -> Any:
@@ -97,7 +98,11 @@ class ScriptEntry:
                 self.target.port,
                 binary=self.target.binary,
                 libc=self.target.libc,
-                log_level=str(self.target.metadata.get("log_level", "info")),
+                log_level=(
+                    str(self.target.metadata.get("log_level", "debug"))
+                    if args.GDB
+                    else "info"
+                ),
                 terminal=list(
                     self.target.metadata.get("terminal", list(DEFAULT_SCRIPT_TERMINAL))
                 ),

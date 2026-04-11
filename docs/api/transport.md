@@ -72,3 +72,8 @@ CHun 第一阶段把连接层独立为 transport。上层统一通过 `session.i
 - 每次交互单独创建连接
 - 连接工厂可注入
 - 不依赖跨请求长连接状态
+
+能力边界：
+
+- blind reconnect 不提供通用长连接语义；`recv()` 等 tube 常规能力不是默认能力面
+- 对不支持的操作会抛 `TransportCapabilityError`，应优先使用 `exchange()` / `run()`

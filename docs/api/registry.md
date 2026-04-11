@@ -85,6 +85,12 @@
 - `session.target.kind`
 - `session.transport`
 - `session.transport.kind`
+- `session.transport.is_open`
+
+运行期补充：
+
+- 首次访问 `session.io`（触发 lazy open）后，会刷新 `session.transport.is_open`
+- 若 transport 暴露 `raw`，还会写入 `session.transport.raw_type`
 
 ## 最小 inference 闭环
 

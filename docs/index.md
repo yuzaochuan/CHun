@@ -21,11 +21,11 @@ CHun 目前处于源码重构第三轮收口阶段。顶层入口已经固定为
 
 ## 文档导航
 
-- [快速开始](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/getting-started.md)
-- [安装](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/installation.md)
-- [架构设计](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/architecture.md)
-- [API 总览](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/index.md)
-- [Cookbook 总览](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/cookbook/index.md)
+- [快速开始](getting-started.md)
+- [安装](installation.md)
+- [架构设计](architecture.md)
+- [API 总览](api/index.md)
+- [Cookbook 总览](cookbook/index.md)
 
 ## 推荐阅读顺序
 

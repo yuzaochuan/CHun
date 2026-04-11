@@ -40,8 +40,13 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 并在初始化时为脚本态准备：
 
 - `context.log_level` / `context.terminal`
-- `elf`：`context.binary = ELF(binary, checksec=False)`
+- `elf`：先构造 `ELF(binary, checksec=False)`，再挂到 `context.binary`
 - `libc`：显式 `ELF(libc, checksec=False)`，或回退到 `elf.libc`
+
+注意事项（与当前 pwntools 行为对齐）：
+
+- `context.log_level` 在 pwntools 内部是标准化后的等级值（例如 `"debug" -> 10`），不是原始字符串
+- `context.binary` 在脚本态会直接指向当前 `ELF` 对象，后续应按“对象已就绪”使用，不要假设每次访问都重新按路径解析
 
 ## `CHunSession`
 
@@ -70,13 +75,13 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 
 ## 工厂方法
 
-- `CHun.process(binary, *, argv=None, env=None, cwd=None, log_level="info")`
-- `CHun.remote(host, port, *, binary=None, timeout=None)`
-- `CHun.ssh_process(host, *, user, binary, argv=None, port=22, ...)`
-- `CHun.http(base_url, *, headers=None, timeout=None, follow_redirects=True, verify=True)`
-- `CHun.websocket(ws_url, *, headers=None, timeout=None, connect_timeout=None)`
+- `CHun.process(binary, *, argv=None, libc=None, ld=None, env=None, cwd=None, log_level="info", terminal=("tmux", "splitw", "-h"))`
+- `CHun.remote(host, port, *, binary=None, libc=None, timeout=None, log_level="info", terminal=("tmux", "splitw", "-h"))`
+- `CHun.ssh_process(host, *, user, binary, argv=None, port=22, password=None, keyfile=None, key_password=None, env=None, cwd=None, log_level="info", terminal=("tmux", "splitw", "-h"))`
+- `CHun.http(base_url, *, headers=None, timeout=None, follow_redirects=True, verify=True, client_factory=None)`
+- `CHun.websocket(ws_url, *, headers=None, timeout=None, connect_timeout=None, connection_factory=None)`
 - `CHun.blind(connection_factory, *, timeout=None)`
-- `CHun.script(binary, *, host=None, port=None, libc=None, ld=None, argv=None, env=None, cwd=None, timeout=None, log_level="info")`
+- `CHun.script(binary, *, host=None, port=None, libc=None, ld=None, argv=None, env=None, cwd=None, timeout=None, log_level="debug", terminal=("tmux", "splitw", "-h"))`
 
 ## `CHun.script()`
 
@@ -96,10 +101,13 @@ t.gdb("b *main\nc")
 
 - 默认运行 `python exp.py` 时，`t.start()` 走本地 `CHun.process()`
 - 传 `REMOTE` 时，`t.start()` 走 `CHun.remote()`
+- `REMOTE` 且非 `GDB` 时，remote target 的 `log_level` 固定为 `"info"`
+- `REMOTE GDB` 时，remote target 继承 process 侧 `log_level`（不强制降级到 `"info"`）
 - 传 `GDB` 且当前 session 是本地 process 时，`t.gdb()` 调用现有 `session.dbg.attach()`
 - `REMOTE GDB` 时只 warning，不会 attach
 - `t.target` 是当前脚本入口使用的 `TargetSpec` 配置对象
 - `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 会显式转发到当前 session
+- 访问 `t.session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
 - 高频交互方法可直接使用 `t.sendlineafter()` / `t.recvline()` / `t.interactive()` 及其 alias
 - 低频 tube 方法通过 `__getattr__` fallback 到 `t.io`
 

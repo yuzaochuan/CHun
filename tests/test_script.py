@@ -28,7 +28,9 @@ class DummyDbg:
 
 @dataclass
 class DummyIO:
-    calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = field(default_factory=list)
+    calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = field(
+        default_factory=list
+    )
 
     def send(self, data: bytes) -> None:
         self.calls.append(("send", (data,), {}))
@@ -94,7 +96,8 @@ def fake_pwntools_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return FakeELF(path)
 
     monkeypatch.setattr(script_mod, "ELF", fake_elf)
-    monkeypatch.setattr(script_mod.context, "binary", None)
+    if "binary" in script_mod.context._tls:
+        del script_mod.context._tls["binary"]
     monkeypatch.setattr(script_mod.context, "log_level", "info")
     monkeypatch.setattr(script_mod.context, "terminal", [])
     return {"loaded": loaded, "auto_libc": auto_libc}
@@ -107,7 +110,9 @@ def test_script_initializes_target_and_runtime_defaults(
     monkeypatch.setattr(script_mod.args, "REMOTE", False)
     monkeypatch.setattr(script_mod.args, "GDB", False)
 
-    entry = CHun.script("./challenge", host="example.com", port=31337, log_level="debug", terminal=())
+    entry = CHun.script(
+        "./challenge", host="example.com", port=31337, log_level="debug", terminal=()
+    )
 
     assert isinstance(entry.target, TargetSpec)
     assert entry.target.binary == "./challenge"
@@ -118,7 +123,7 @@ def test_script_initializes_target_and_runtime_defaults(
     assert entry.libc is fake_pwntools_env["auto_libc"]
     assert entry.target.libc == "/glibc/libc.so.6"
     assert script_mod.context.binary is entry.elf
-    assert script_mod.context.log_level == "debug"
+    assert script_mod.context.log_level == 10
     assert script_mod.context.terminal == ["tmux", "splitw", "-h"]
     assert fake_pwntools_env["loaded"] == [("./challenge", False)]
 
@@ -165,7 +170,7 @@ def test_script_start_uses_process_by_default(
     assert calls[0]["target"].env == {"MODE": "1"}
     assert calls[0]["target"].cwd == "/tmp/challenge"
     assert calls[0]["target"].metadata == {
-        "log_level": "info",
+        "log_level": "debug",
         "terminal": ["tmux", "splitw", "-h"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
@@ -227,7 +232,9 @@ def test_script_gdb_attaches_for_local_process(
 ) -> None:
     session = DummySession(kind="process")
 
-    def fake_from_specs(cls: type[CHun], target: TargetSpec, transport: Any) -> DummySession:
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
         assert target.kind == "process"
         assert target.binary == "./challenge"
         assert transport.kind == "pwntools-tube"
@@ -242,7 +249,9 @@ def test_script_gdb_attaches_for_local_process(
     result = entry.gdb("b *main\nc")
 
     assert result == "attached"
-    assert session.dbg.attach_calls == [{"io": None, "script": "b *main\nc", "api": True}]
+    assert session.dbg.attach_calls == [
+        {"io": None, "script": "b *main\nc", "api": True}
+    ]
 
 
 def test_script_gdb_warns_for_remote_session(
@@ -252,7 +261,9 @@ def test_script_gdb_warns_for_remote_session(
     session = DummySession(kind="remote")
     warnings: list[str] = []
 
-    def fake_from_specs(cls: type[CHun], target: TargetSpec, transport: Any) -> DummySession:
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
         assert target.kind == "remote"
         assert (target.host, target.port) == ("example.com", 31337)
         assert transport.kind == "pwntools-tube"
@@ -270,6 +281,29 @@ def test_script_gdb_warns_for_remote_session(
     assert result is None
     assert session.dbg.attach_calls == []
     assert warnings == ["当前为 REMOTE 模式，跳过 GDB attach。"]
+
+
+def test_script_remote_gdb_keeps_process_log_level(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="remote")
+    calls: list[dict[str, Any]] = []
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        calls.append({"target": target, "transport": transport})
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", True)
+    monkeypatch.setattr(script_mod.args, "GDB", True)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", host="example.com", port=31337)
+    entry.start()
+
+    assert calls[0]["target"].metadata["log_level"] == "debug"
 
 
 def test_script_session_property_requires_start(
@@ -311,7 +345,9 @@ def test_script_explicit_io_methods_and_aliases_forward_to_io(
 ) -> None:
     session = DummySession(kind="process")
 
-    def fake_from_specs(cls: type[CHun], target: TargetSpec, transport: Any) -> DummySession:
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
         assert target.kind == "process"
         assert transport.kind == "pwntools-tube"
         return session
@@ -363,7 +399,9 @@ def test_script_getattr_falls_back_to_io_only(
 ) -> None:
     session = DummySession(kind="process")
 
-    def fake_from_specs(cls: type[CHun], target: TargetSpec, transport: Any) -> DummySession:
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
         return session
 
     monkeypatch.setattr(script_mod.args, "REMOTE", False)
