@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core.errors import MissingDependencyError, TransportCapabilityError, TransportConfigError
+from ..core.errors import (
+    MissingDependencyError,
+    TransportCapabilityError,
+    TransportConfigError,
+)
+from ..core.models import TargetSpec, TransportSpec
 from .base import BaseTransport
 
 
 class WebSocketTransport(BaseTransport):
     """基于同步 WebSocket 客户端的 transport。"""
 
-    def __init__(self, target: object, spec: object) -> None:
+    def __init__(self, target: TargetSpec, spec: TransportSpec) -> None:
         super().__init__(target, spec)
         self._socket: Any = None
 

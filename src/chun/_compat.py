@@ -15,13 +15,25 @@ LOGGER = logging.getLogger("chun")
 
 def _runtime_error(name: str) -> RuntimeError:
     """构造统一的运行期错误信息。"""
-    return RuntimeError(
-        f"使用 '{name}' 需要 pwntools，请先安装：pip install pwntools"
-    )
+    return RuntimeError(f"使用 '{name}' 需要 pwntools，请先安装：pip install pwntools")
 
 
 try:
-    from pwn import ELF, args, context, gdb, log, pause, process, remote, ssh  # type: ignore
+    from pwn import (
+        ELF,
+        Corefile,
+        DynELF,
+        MemLeak,
+        args,  # type: ignore
+        context,
+        cyclic_find,
+        gdb,
+        log,
+        pause,
+        process,
+        remote,
+        ssh,
+    )
 except Exception:  # pragma: no cover
 
     class _Args:
@@ -83,12 +95,20 @@ except Exception:  # pragma: no cover
     process = _missing
     remote = _missing
     ssh = _missing
+    MemLeak = _missing
+    DynELF = _missing
+    Corefile = _missing
+    cyclic_find = _missing
 
 
 __all__ = [
+    "Corefile",
+    "DynELF",
     "ELF",
+    "MemLeak",
     "args",
     "context",
+    "cyclic_find",
     "gdb",
     "log",
     "pause",

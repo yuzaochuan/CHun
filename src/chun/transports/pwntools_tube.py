@@ -6,13 +6,14 @@ from typing import Any
 
 from .._compat import context, process, remote, ssh
 from ..core.errors import TransportConfigError
+from ..core.models import TargetSpec, TransportSpec
 from .base import BaseTransport
 
 
 class PwntoolsTubeTransport(BaseTransport):
     """统一承接 process / remote / ssh.process。"""
 
-    def __init__(self, target: object, spec: object) -> None:
+    def __init__(self, target: TargetSpec, spec: TransportSpec) -> None:
         super().__init__(target, spec)
         self._tube: Any = None
         self._ssh_client: Any = None
@@ -67,7 +68,9 @@ class PwntoolsTubeTransport(BaseTransport):
     def _open_ssh_process(self) -> Any:
         ssh_host = self.target.ssh_host or self.target.host
         if ssh_host is None or self.target.ssh_user is None:
-            raise TransportConfigError("ssh.process 模式必须提供 ssh_host 和 ssh_user。")
+            raise TransportConfigError(
+                "ssh.process 模式必须提供 ssh_host 和 ssh_user。"
+            )
 
         argv = list(self.target.argv)
         if not argv:
@@ -84,7 +87,9 @@ class PwntoolsTubeTransport(BaseTransport):
             key_password=self.target.ssh_key_password,
             cache=False,
         )
-        return self._ssh_client.process(argv, env=self.target.env or None, cwd=self.target.cwd)
+        return self._ssh_client.process(
+            argv, env=self.target.env or None, cwd=self.target.cwd
+        )
 
     def _close(self) -> None:
         if self._tube is not None and hasattr(self._tube, "close"):
@@ -98,6 +103,13 @@ class PwntoolsTubeTransport(BaseTransport):
     def raw(self) -> Any:
         return self._tube
 
+    def __getattr__(self, name: str) -> Any:
+        """将未显式声明的常用 tube 方法透传到底层 pwntools 对象。"""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        self._require_open()
+        return getattr(self._tube, name)
+
     def send(self, data: bytes) -> None:
         self._require_open()
         self._tube.send(data)
@@ -105,6 +117,14 @@ class PwntoolsTubeTransport(BaseTransport):
     def sendline(self, data: bytes) -> None:
         self._require_open()
         self._tube.sendline(data)
+
+    def sendafter(self, delim: bytes, data: bytes) -> None:
+        self._require_open()
+        self._tube.sendafter(delim, data)
+
+    def sendlineafter(self, delim: bytes, data: bytes) -> None:
+        self._require_open()
+        self._tube.sendlineafter(delim, data)
 
     def recv(self, n: int = 4096) -> bytes:
         self._require_open()

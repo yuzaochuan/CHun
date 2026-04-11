@@ -1,114 +1,111 @@
 # Registry API
 
-## `PwnRegistry` / `Reg` 的职责
+## `EvidenceRegistry` 的职责
 
-`PwnRegistry` 是 CHun 的统一情报中心，负责：
+`EvidenceRegistry` 是 CHun 第二阶段正式落地的统一事实层，负责：
 
-- 记录地址泄漏（`AddressRecord`）
-- 记录已确认 base（`BaseRecord`）
-- 保存非地址上下文（`_misc`）
-- 提供 base 推导（`infer_base`）与地址分类（`classify_address`）
+- 记录原始观测（`observations`）
+- 记录稳定事实（`facts`）
+- 记录可复用产物（`artifacts`）
+- 记录会话上下文（`context`）
 
-`Reg` 是 `PwnRegistry` 的别名，方便脚本短写。
+## 四类记录分别是什么
 
-## 三类记录分别是什么
+- `observations`
+  - 原始观测，不保证已经被证明
+  - 例如 symbol leak、HTTP 响应、blind 探测结果
+- `facts`
+  - 已确认或经过归纳的稳定结论
+  - 例如 `libc.base`、`fmt.input_offset`
+- `artifacts`
+  - 可复用产物
+  - 例如 payload、脚本、模板渲染结果
+- `context`
+  - 会话背景信息
+  - 例如 target kind、transport kind、libc path
 
-- 地址记录（`_records`）：`name -> AddressRecord`，包括 `kind/source/confidence/notes/meta`
-- base 记录（`_bases`）：`name -> BaseRecord`，保存已接受的 base
-- misc 记录（`_misc`）：任意非整数上下文，如阶段标记、注释、状态字符串
+## 记录 API
 
-## `add_log()` 兼容层语义
+主入口是显式 typed API，而不是万能 `add_log()`：
 
-`add_log(name, value, **kwargs)` 用于兼容旧脚本。
+- `record_observation()`
+- `record_symbol_leak()`
+- `record_fact()`
+- `record_artifact()`
+- `set_context()`
 
-- `(name, int)` 或 `kwargs` 中的 `int`：按地址记录写入
-- 非 `int`：写入 `_misc`
-
-它让旧代码保持低改造成本，同时把数据集中到统一状态中心。
-
-## `_add_any_value()` 与 `add_log()` 的关系
-
-当前实现中，`add_log()` 的实际分流由 `_add_any_value()` 完成：
-
-- `int` -> `add_address(..., kind=RecordKind.LEAK)`
-- other -> `_misc[key] = item`
-
-## 关于 `_extract_add_log_meta()`
-
-当前代码已经实现 `_extract_add_log_meta()`，并支持在“单条记录可明确定位”时透传以下元字段：
+所有记录都显式携带语义字段：
 
 - `kind`
+- `domain`
 - `source`
 - `confidence`
-- `notes`
-- `meta`
+- `tags`
+- `metadata`
 
-这让你可以在保持旧写法的同时，按需补充结构化元信息。
+## 查询与读取
 
-## `infer_base()` 作用、参数、返回值
+- `get_observation(name)`
+- `get_fact(name)`
+- `get_artifact(name)`
+- `get_context(name)`
+- `find_observations(...)`
+- `find_facts(...)`
+- `find_artifacts(...)`
+- `find_context(...)`
 
-作用：根据“泄漏地址 + 符号偏移”生成 base 候选并评分，可按阈值自动入库。
+查询维度目前支持：
 
-关键参数：
+- `domain`
+- `kind`
+- `tag`
+- `source`
 
-- `leak_name`：泄漏记录名（必须已存在）
-- `symbol_offset`：已知符号偏移（非负）
-- `base_name`：候选命名；缺省时自动推导
-- `min_accept_score`：覆盖默认阈值
-- `store`：是否在达标后写入 `_bases`
+## 覆盖与更新规则
 
-返回值：`BaseCandidate`（`raw_base/aligned_base/score/reasons`）。
+所有写接口都支持 `overwrite=`。
 
-此外，`infer_base()` 每次执行后会刷新“最近一次推导快照”，可通过
-`show_last_infer(verbose=False)` 进行分层展示（事件流 + Infer Card + 可选调试展开）。
+- `overwrite=True`
+  - 用新记录覆盖旧记录
+- `overwrite=False`
+  - 若记录已存在则抛出 `RegistryConflictError`
 
-## 评分思想（当前实现）
+这让“更新”和“防止误覆盖”变成显式行为。
 
-- 页对齐质量：已对齐加分更高
-- 地址区间先验：PIE/LIBC/TEXT 更可信
-- 泄漏继承：按原记录 `confidence` 加权
-- 已有 base 一致性：一致加分，冲突减分
+## 与 `CHunSession` 的关系
 
-最终分数被限制在 `[0.0, 1.0]`，且只有超过阈值时才自动入库。
+每个 session 都会稳定持有一个 registry：
 
-## `classify_address()` 启发式能力
+- `session.registry`
+- `session.rec`
 
-`classify_address(value)` 返回 `AddressClass`，用于快速判断地址更像 `PIE/LIBC/STACK/HEAP`。这是提示能力，不是严格证明。
+并在创建时自动写入最小上下文：
 
-## `show_last_infer(verbose=False)` 输出分层
+- `session.target`
+- `session.target.kind`
+- `session.transport`
+- `session.transport.kind`
+- `session.transport.is_open`
 
-Infer 展示层默认分为三层：
+运行期补充：
 
-- 事件流：`[*] / [+] / [!] / [-]` 时间线，快速说明“刚刚发生了什么”
-- Infer Card：结论卡片（target/status/leak/base/score + evidence + derived + next）
-- Debug 展开：仅 `verbose=True` 时显示，包含 `raw/aligned/address_class/threshold` 与分项评分解释
+- 首次访问 `session.io`（触发 lazy open）后，会刷新 `session.transport.is_open`
+- 若 transport 暴露 `raw`，还会写入 `session.transport.raw_type`
 
-状态颜色约定：
+## 最小 inference 闭环
 
-- `ACCEPTED`：绿色
-- `WEAK`：黄色
-- `CONFLICT`：红色
-- `REJECTED`：灰色
+`session.infer.libc_base_from_symbol_leak()` 会：
 
-地址字段统一高亮为青色，派生结果字段统一为蓝色。
+1. 从 observation 读取 symbol leak
+2. 按给定 `symbol_offset` 推导 base
+3. 把结果写回 fact，例如 `libc.base`
 
-## `puts_log(verbose=False)` 与 `show_snapshot(verbose=False)`
+这证明新的 registry 不是纯存储壳，而是能承接 session + inference 的最小工作流闭环。
 
-- 默认 `verbose=False`：简洁视图，只显示核心键值
-- `verbose=True`：展开 `kind/source/confidence` 详细字段
+## 当前推荐入口
 
-`show_snapshot()` 保留为全量快照展示入口，不再作为 infer 的主输出。
+- 类型名使用 `EvidenceRegistry`
+- 会话内访问优先使用 `session.registry`
+- 需要短写时使用 `session.rec`
 
-对应关系：
-
-- `PwnRegistry.puts_log(verbose=...)` -> 快照视图
-- `PwnRegistry.show_snapshot(verbose=...)` -> 显式快照视图
-- `PwnRegistry.show_last_infer(verbose=...)` -> infer 分层视图
-
-## `kind / source / confidence / notes / meta` 含义
-
-- `kind`：记录语义（泄漏、base、栈指针等）
-- `source`：来源（手工、blind、推导等）
-- `confidence`：置信度（0~1）
-- `notes`：人类可读备注
-- `meta`：结构化上下文（payload、index、symbol_offset 等）
+不再把额外别名当作长期公开接口。

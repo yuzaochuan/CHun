@@ -2,15 +2,30 @@
 
 CHun: a lightweight and evolving Pwn toolkit by Chenhun.
 
-CHun 当前已进入第一阶段架构重构：顶层入口切到 `CHun` / `CHunSession`，运行时以 `TargetSpec + TransportSpec + Transport` 为地基，为后续扩展打 Transport 层基础。
+CHun 当前已进入第三轮收口阶段：在前两轮的 transport + registry/session 地基之上，已经固定了 pwntools / GDB bridge、DynELF 解析链路和 core dump 分析入口的公开用法。
 
 ## 核心特性
 
 - 会话入口：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()`
+  <<<<<<< HEAD
+- 脚本模式入口：`CHun.script()`，保留人工写 exp 时的快速切换手感
+- Web 方向 transport：`CHun.http()` / `CHun.websocket()`
+- Blind transport：`CHun.blind()` + `BlindReconnectTransport`
+- 会话内统一事实层：`session.registry` / `session.rec`
+- 最小 inference 入口：`session.infer`
+- 调试与解析入口：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
+
+## 当前稳定公开接口
+
+- 顶层工厂：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()` / `CHun.http()` / `CHun.websocket()` / `CHun.blind()`
+- 脚本 facade：`CHun.script()`
+- 会话入口：`session.io` / `session.registry` / `session.rec` / `session.infer`
+- # 调试与解析：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
 - Web 方向 transport：`CHun.http()` / `CHun.websocket()`
 - Blind transport：`CHun.blind()` + `BlindReconnectTransport`
 - 第一阶段主力 transport：`PwntoolsTubeTransport` / `HttpxTransport` / `WebSocketTransport`
 - `PwnRegistry` 仍保留为独立状态中心，后续阶段再接回完整 session
+  > > > > > > > main
 
 ## 安装
 
@@ -24,8 +39,9 @@ python -m pip install -e .
 from chun import CHun
 
 p = CHun.process("./challenge")
-p.io.sendline(b"1")
-print(p.io.recvuntil(b"\n"))
+p.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+result = p.infer.libc_base_from_symbol_leak("puts", symbol_offset=0x80000)
+print(hex(result.aligned_base))
 ```
 
 ## 多种连接方式
@@ -45,6 +61,44 @@ ws.io.send_message("ping")
 print(ws.io.recv_message())
 ```
 
+## 脚本模式 facade
+
+显式工厂适合自动化、模板和 agent；`CHun.script()` 只给人工写 exp 时保留快速切换手感。
+
+初始化时会顺手完成：
+
+- `context.log_level` / `context.terminal`
+- `t.elf = context.binary = ELF(binary, checksec=False)`
+- `t.libc = ELF(libc, checksec=False)`，未显式传入时会尝试从 `t.elf.libc` 自动拿
+- `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力会作为显式 facade 暴露
+- `t.sla()` / `t.rl()` / `t.ia()` 等高频 tube 方法和 alias 可直接调用
+- 低频 tube 方法仍可通过 fallback 使用，例如 `t.clean()`
+
+```python
+from chun import CHun
+from pwn import *
+
+t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
+t.start()
+
+t.gdb("""
+b *main
+c
+""")
+
+t.sla(b"menu> ", b"1")
+t.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+```
+
+命令行切换方式：
+
+```bash
+python exp.py
+python exp.py GDB
+python exp.py REMOTE
+python exp.py REMOTE GDB
+```
+
 ## Blind reconnect 示例
 
 ```python
@@ -59,6 +113,40 @@ response = blind.io.exchange(
 print(response)
 ```
 
+## Session + Registry 示例
+
+```python
+from chun import CHun, RecordDomain
+
+session = CHun.process("./challenge")
+session.rec.set_context("libc.path", "/glibc/libc.so.6", domain=RecordDomain.LIBC)
+session.rec.record_artifact("payload.stage1", b"AAAA", tags=["payload"])
+```
+
+## 最小 workflow 示例
+
+```python
+from chun import CHun
+
+session = CHun.process("./challenge")
+
+# ret2libc
+session.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+# session.resolve.libc_base_from_elf_symbol("puts", libc_elf=libc, symbol="puts")
+
+# 交互式 GDB attach
+# session.dbg.attach(script="b *main\nc")
+
+# blind leak -> DynELF
+result = session.resolve.symbol_via_dynelf(
+    "system",
+    leak_primitive=lambda addr, size=8: b"\x00" * size,
+    pointer=0x601018,
+    lib="libc",
+)
+print(hex(result.address))
+```
+
 ## 文档入口
 
 - 文档首页：[`docs/index.md`](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/index.md)
@@ -70,9 +158,10 @@ print(response)
 ## 当前模块概览
 
 - `src/chun/facade.py`：`CHun` 顶层工厂入口
-- `src/chun/core`：`session.py`、`models/`、`errors.py`、`registry.py`
+- `src/chun/core`：`session.py`、`models/`、`errors.py`、`registry/`、`inference/`、`resolve/`、`analysis/`
+- `src/chun/bridges`：GDB / pwntools 相关 bridge
 - `src/chun/transports`：transport 实现与组装工厂
 - `src/chun/plugins`：后续 blind/fmt/heap 插件骨架
 - `src/chun/utils`：`display.py`、`misc.py`
 
-当前阶段刻意未做完整 Registry 重构、Inference 新系统、fmt/heap/libc/template 主体实现。
+当前阶段刻意未做 fmt / heap / template 主体，以及 pwngdb / pwndbg 深集成。

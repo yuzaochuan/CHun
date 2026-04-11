@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, TypeVar
 
 from ..core.errors import TransportCapabilityError, TransportConfigError
+from ..core.models import TargetSpec, TransportSpec
 from .base import BaseTransport
 
 T = TypeVar("T")
@@ -13,7 +14,7 @@ T = TypeVar("T")
 class BlindReconnectTransport(BaseTransport):
     """每次交互都通过工厂创建新连接的 transport。"""
 
-    def __init__(self, target: object, spec: object) -> None:
+    def __init__(self, target: TargetSpec, spec: TransportSpec) -> None:
         super().__init__(target, spec)
         self._last_raw: Any = None
 
@@ -50,16 +51,18 @@ class BlindReconnectTransport(BaseTransport):
         )
 
     def interactive(self) -> None:
-        raise TransportCapabilityError(
-            "BlindReconnectTransport 不支持 interactive()。"
-        )
+        raise TransportCapabilityError("BlindReconnectTransport 不支持 interactive()。")
 
     def _spawn_connection(self) -> tuple[Any, Callable[[], None]]:
         self._require_open()
         connection_factory = self.spec.metadata["connection_factory"]
         created = connection_factory()
 
-        if hasattr(created, "open") and hasattr(created, "close") and hasattr(created, "raw"):
+        if (
+            hasattr(created, "open")
+            and hasattr(created, "close")
+            and hasattr(created, "raw")
+        ):
             created.open()
             raw = created.raw
 
