@@ -65,6 +65,16 @@ class BaseTransport(ABC):
     def sendline(self, data: bytes) -> None:
         raise TransportCapabilityError(f"{self.__class__.__name__} 不支持 sendline()。")
 
+    def sendafter(self, delim: bytes, data: bytes) -> None:
+        raise TransportCapabilityError(
+            f"{self.__class__.__name__} 不支持 sendafter()。"
+        )
+
+    def sendlineafter(self, delim: bytes, data: bytes) -> None:
+        raise TransportCapabilityError(
+            f"{self.__class__.__name__} 不支持 sendlineafter()。"
+        )
+
     def recv(self, n: int = 4096) -> bytes:
         raise TransportCapabilityError(f"{self.__class__.__name__} 不支持 recv()。")
 

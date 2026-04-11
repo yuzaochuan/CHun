@@ -15,9 +15,14 @@ CHun 第一阶段把连接层独立为 transport。上层统一通过 `session.i
 主要方法：
 
 - `open()` / `close()` / `reconnect()`
-- `send()` / `sendline()`
+- `send()` / `sendline()` / `sendafter()` / `sendlineafter()`
 - `recv()` / `recvuntil()`
 - `interactive()`
+
+说明：
+
+- `session.io` 现在可以直接走常见的 pwntools 风格交互，不必先退回 `session.raw`
+- 未显式列出的常用 `tube` 方法会自动透传到底层 pwntools 对象，例如 `recvline()`
 
 ## `HttpxTransport`
 
@@ -67,3 +72,8 @@ CHun 第一阶段把连接层独立为 transport。上层统一通过 `session.i
 - 每次交互单独创建连接
 - 连接工厂可注入
 - 不依赖跨请求长连接状态
+
+能力边界：
+
+- blind reconnect 不提供通用长连接语义；`recv()` 等 tube 常规能力不是默认能力面
+- 对不支持的操作会抛 `TransportCapabilityError`，应优先使用 `exchange()` / `run()`

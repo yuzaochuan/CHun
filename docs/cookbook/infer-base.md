@@ -7,49 +7,46 @@
 ## 示例
 
 ```python
-from chun.core.registry import PwnRegistry
+from chun import CHun, RecordDomain
 
-reg = PwnRegistry()
+session = CHun.process("./challenge")
 
 puts_leak = 0x7F1234580000
 puts_offset = 0x080000
 
-reg.add_log("puts@libc", puts_leak)
-candidate = reg.infer_base(
-    leak_name="puts@libc",
-    symbol_offset=puts_offset,
-    base_name="libc",
+session.rec.record_symbol_leak(
+    "puts",
+    puts_leak,
+    domain=RecordDomain.LIBC,
+    source="got",
 )
+result = session.infer.libc_base_from_symbol_leak("puts", symbol_offset=puts_offset)
 
-print(hex(candidate.raw_base))
-print(hex(candidate.aligned_base))
-print(candidate.score)
-print(candidate.reasons)
+print(hex(result.raw_base))
+print(hex(result.aligned_base))
+print(hex(result.value))
+print(session.registry.get_fact("libc.base"))
 ```
 
-默认会在 infer 完成后输出 `Infer Card`（主结论 + 证据 + 派生结果 + 下一步）。
-如果只想看全量状态快照，改用：
+如果只想直接读取事实层，可以改用：
 
 ```python
-reg.show_snapshot()
+fact = session.registry.get_fact("libc.base")
+print(fact.value if fact else None)
 ```
 
-如果要看调试展开（含 raw/aligned/分项评分）：
+如果想看这次推导和哪条 observation 关联：
 
 ```python
-reg.show_last_infer(verbose=True)
+result = session.infer.libc_base_from_symbol_leak("puts", symbol_offset=puts_offset)
+print(result.observation_name, hex(result.aligned_base))
 ```
 
-Infer 输出分层：
-
-- 事件流：简短时间线（`[*] / [+] / [!] / [-]`）
-- Infer Card：默认主输出，聚焦结果与依据
-- Debug 展开：仅 `verbose=True` 打开，方便调阈值与审计评分
-
-## 如何解读评分结果
+## 如何解读结果
 
 - `aligned_base`：页对齐后的候选值，通常作为后续基址
-- `score`：0~1 置信评分，受地址区间、对齐质量、泄漏置信度等影响
-- `reasons`：每个加减分的解释文本，可用于快速审计当前结论
+- `raw_base`：按 observation 减去 offset 后得到的原始结果
+- `stored_fact`：已经写回 registry 的 `Fact`
+- `value`：`aligned_base` 的别名，适合直接参与后续地址计算
 
-注意：本次 UI 升级只改变展示层，不改变 `infer_base()` 的评分逻辑与数据模型。
+当前阶段的 inference 目标是打通最小闭环，不是提前实现完整评分系统。

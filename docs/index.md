@@ -2,7 +2,7 @@
 
 ## CHun 是什么
 
-CHun 目前处于源码重构第一阶段。顶层入口已经从旧式 `Tool(remote_mode=...)` 切换为 `CHun` 工厂与 `CHunSession`，底层运行时围绕 `Transport` 独立成层，为后续 Evidence / Inference / Template 能力继续扩展打地基。
+CHun 目前处于源码重构第三轮收口阶段。顶层入口已经固定为 `CHun` 工厂与 `CHunSession`，并在 transport / registry / inference 之上接入了 debug、resolve、crash 三类 bridge。
 
 ## 适用场景
 
@@ -15,16 +15,17 @@ CHun 目前处于源码重构第一阶段。顶层入口已经从旧式 `Tool(re
 
 - 已实现：`TargetSpec` / `TransportSpec` / `CHunSession`
 - 已实现：`PwntoolsTubeTransport`、`HttpxTransport`、`WebSocketTransport`、`BlindReconnectTransport`
-- 已保留：`PwnRegistry` 作为独立状态中心
-- 刻意未做：完整 Registry 重构、Inference 新系统、fmt/heap/template 主体
+- 已实现：`EvidenceRegistry`、`session.rec`、`session.infer`
+- 已实现：`session.dbg`、`session.gdb_mi`、`session.resolve`、`session.crash`
+- 刻意未做：fmt/heap/template 主体与 pwngdb/pwndbg 深整合
 
 ## 文档导航
 
-- [快速开始](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/getting-started.md)
-- [安装](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/installation.md)
-- [架构设计](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/architecture.md)
-- [API 总览](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/api/index.md)
-- [Cookbook 总览](/Users/zaochuan/Documents/code/python/CHun_pwn/docs/cookbook/index.md)
+- [快速开始](getting-started.md)
+- [安装](installation.md)
+- [架构设计](architecture.md)
+- [API 总览](api/index.md)
+- [Cookbook 总览](cookbook/index.md)
 
 ## 推荐阅读顺序
 

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from ..core.errors import TransportConfigError
 from ..core.models import TargetSpec, TransportSpec
+from .base import BaseTransport
 from .blind_reconnect import BlindReconnectTransport
 from .httpx_client import HttpxTransport
 from .pwntools_tube import PwntoolsTubeTransport
 from .websocket import WebSocketTransport
 
 
-def build_transport(target: TargetSpec, spec: TransportSpec) -> object:
+def build_transport(target: TargetSpec, spec: TransportSpec) -> BaseTransport:
     """根据 spec 构建对应 transport。"""
     if spec.kind == "pwntools-tube":
         if target.kind not in {"process", "remote", "ssh"}:

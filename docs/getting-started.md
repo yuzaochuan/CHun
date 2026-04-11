@@ -15,12 +15,21 @@ python -m pip install -e .
 ## 最小示例
 
 ```python
-from chun import CHun
+from chun import CHun, RecordDomain
 
 p = CHun.process("./challenge")
-p.io.sendline(b"1")
-print(p.io.recvuntil(b"\n"))
+p.rec.record_symbol_leak("puts", 0x7F1234580000, domain=RecordDomain.LIBC, source="got")
+result = p.infer.libc_base_from_symbol_leak("puts", symbol_offset=0x80000)
+print(hex(result.aligned_base))
 ```
+
+## 稳定公开入口
+
+- `CHun.process()` / `CHun.remote()` / `CHun.ssh_process()`
+- `CHun.http()` / `CHun.websocket()` / `CHun.blind()`
+- `CHun.script()`：面向人工写 exp 的薄 facade
+- `session.io` / `session.registry` / `session.rec` / `session.infer`
+- `session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
 
 ## 本地 / 远程 / SSH
 
@@ -34,6 +43,44 @@ ssh_remote = CHun.ssh_process(
     user="ctf",
     binary="/home/ctf/challenge",
 )
+
+io = remote.io
+io.sendlineafter(b"menu> ", b"1")
+print(io.recvuntil(b"\n"))
+```
+
+## 脚本模式快速切换
+
+显式工厂适合模板、自动化和明确调用路径；`CHun.script()` 适合手写 exp 时保留 `start()` / `gdb()` 的旧手感。
+
+初始化时还会默认准备：
+
+- `context.log_level` / `context.terminal`
+- `t.elf = context.binary`
+- `t.libc`，若未显式传入则尝试从 `t.elf.libc` 自动获取
+- `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力的显式入口
+- `t.sla()` / `t.rl()` / `t.ia()` 等高频交互方法与 alias
+- 低频 tube 方法可继续通过 fallback 使用，例如 `t.clean()`
+
+```python
+from chun import CHun
+from pwn import *
+
+t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
+t.start()
+
+t.gdb("b *main\nc")
+t.sla(b"menu> ", b"1")
+t.resolve
+```
+
+支持的命令行模式：
+
+```bash
+python exp.py
+python exp.py GDB
+python exp.py REMOTE
+python exp.py REMOTE GDB
 ```
 
 ## HTTP / WebSocket
@@ -68,7 +115,50 @@ result = blind.io.exchange(
 print(result)
 ```
 
+## 调试与解析入口
+
+```python
+from chun import CHun
+
+session = CHun.process("./challenge")
+
+# 交互式 GDB
+# session.dbg.attach(script="b *main\nc")
+
+# GDB/MI
+# mi_result = session.gdb_mi.execute("-gdb-version")
+
+# DynELF
+resolved = session.resolve.symbol_via_dynelf(
+    "system",
+    leak_primitive=lambda addr, size=8: b"\x00" * size,
+    pointer=0x601018,
+    lib="libc",
+)
+print(hex(resolved.address))
+```
+
+## 三条最小 workflow
+
+```python
+from chun import CHun
+
+session = CHun.process("./challenge")
+
+# ret2libc
+session.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+# base = session.resolve.libc_base_from_elf_symbol("puts", elf=libc, symbol="puts")
+# print(hex(base.value))
+
+# blind leak -> DynELF
+blind = CHun.blind(lambda: object())
+# blind.resolve.symbol_via_dynelf("system", leak_primitive=leak_func, pointer=0x601018)
+
+# corefile -> crash facts
+# session.crash.analyze("/tmp/core")
+```
+
 ## 当前阶段边界
 
-- 已落地：session 入口、spec 模型、四类 transport
-- 暂未重建：完整 Registry 新架构、Inference 新系统、fmt/heap/template 主体
+- 已落地：session 入口、transport、registry、最小 inference、debug/resolve/crash bridge
+- 暂未实现：fmt/heap/template 主体与 pwngdb/pwndbg 深集成

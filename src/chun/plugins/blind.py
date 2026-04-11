@@ -14,7 +14,8 @@ import time
 from typing import Any, Callable, Protocol
 
 from .._compat import context, log
-from ..core.registry import PwnRegistry, RecordKind, RecordSource
+from ..core.models import FactKind, ObservationKind, RecordDomain
+from ..core.registry import EvidenceRegistry
 
 
 class InteractFunc(Protocol):
@@ -31,7 +32,7 @@ class BlindFmtTool:
         self,
         io_factory: Callable[[], Any],
         interact_func: InteractFunc,
-        registry: PwnRegistry | None = None,
+        registry: EvidenceRegistry | None = None,
         arch: int = 64,
         delay: float = 0.10,
         timeout: float = 2.0,
@@ -139,14 +140,19 @@ class BlindFmtTool:
 
                 pointer = self._extract_pointer(clean_text)
                 if record_hits and pointer is not None and self.registry is not None:
-                    self.registry.add_address(
-                        name=f"fmt.stack.{index}",
-                        value=pointer,
-                        kind=RecordKind.STACK_PTR,
-                        source=RecordSource.BLIND_FMT,
+                    self.registry.record_observation(
+                        f"fmt.stack.{index}",
+                        pointer,
+                        kind=ObservationKind.ADDRESS_LEAK,
+                        domain=RecordDomain.FMT,
+                        source="blind-fmt",
                         confidence=0.45,
-                        notes="Blind FMT `%p` 扫描命中",
-                        meta={"index": index, "payload": payload.decode()},
+                        tags=["fmt", "stack"],
+                        metadata={
+                            "index": index,
+                            "payload": payload.decode(),
+                            "notes": "Blind FMT `%p` 扫描命中",
+                        },
                     )
 
                 if self._is_offset_hit(clean_text):
@@ -155,14 +161,16 @@ class BlindFmtTool:
                         f" \033[1;32m[!] 命中 Offset -> %{index}$p ({clean_text})\033[0m"
                     )
                     if self.registry is not None:
-                        self.registry.add_address(
-                            name="fmt.input_offset",
-                            value=index,
-                            kind=RecordKind.FMT_OFFSET_HIT,
-                            source=RecordSource.BLIND_FMT,
+                        self.registry.record_fact(
+                            "fmt.input_offset",
+                            index,
+                            kind=FactKind.OFFSET,
+                            domain=RecordDomain.FMT,
+                            source="blind-fmt",
                             confidence=0.90,
-                            notes="通过 0x2425/0x7024 特征识别 offset",
-                            meta={"response": clean_text},
+                            evidence=[f"fmt.stack.{index}"],
+                            tags=["fmt", "offset"],
+                            metadata={"response": clean_text},
                         )
                 else:
                     if str(getattr(context, "log_level", "")).upper() != "DEBUG":
@@ -194,7 +202,15 @@ class BlindFmtTool:
             log.success(f"Index {index} 命中字串：{decoded}")
 
             if self.registry is not None:
-                self.registry.add_log(**{f"fmt.string.{index}": decoded})
+                self.registry.record_observation(
+                    f"fmt.string.{index}",
+                    decoded,
+                    kind=ObservationKind.SCALAR,
+                    domain=RecordDomain.FMT,
+                    source="blind-fmt",
+                    confidence=0.40,
+                    tags=["fmt", "string"],
+                )
 
         return results
 
@@ -215,14 +231,16 @@ class BlindFmtTool:
                 self.offset = index
                 log.success(f"找到输入 offset = {index}")
                 if self.registry is not None:
-                    self.registry.add_address(
-                        name="fmt.input_offset",
-                        value=index,
-                        kind=RecordKind.FMT_OFFSET_HIT,
-                        source=RecordSource.BLIND_FMT,
+                    self.registry.record_fact(
+                        "fmt.input_offset",
+                        index,
+                        kind=FactKind.OFFSET,
+                        domain=RecordDomain.FMT,
+                        source="blind-fmt",
                         confidence=0.95,
-                        notes="在 `%p` 输出中匹配到小端 marker",
-                        meta={"marker": marker_text},
+                        evidence=[],
+                        tags=["fmt", "offset"],
+                        metadata={"marker": marker_text},
                     )
                 return index
 
