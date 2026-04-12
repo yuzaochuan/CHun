@@ -58,6 +58,8 @@ print(io.recvuntil(b"\n"))
 - `context.log_level` / `context.terminal`
 - `t.elf = context.binary`
 - `t.libc`，若未显式传入则尝试从 `t.elf.libc` 自动获取
+- `t.start()` 返回 `t` 自身，因此既支持分步写法，也支持 `t = CHun.script(...).start()`
+- `t.start()` 后会把 `t.elf` / `t.libc` 绑定为 `t.resolve` 的默认解析对象
 - `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力的显式入口
 - `t.sla()` / `t.rl()` / `t.ia()` 等高频交互方法与 alias
 - 低频 tube 方法可继续通过 fallback 使用，例如 `t.clean()`
@@ -69,9 +71,13 @@ from pwn import *
 t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
 t.start()
 
+# 或者：
+# t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6").start()
+
 t.gdb("b *main\nc")
 t.sla(b"menu> ", b"1")
-t.resolve
+base = t.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
+print(hex(base.value))
 ```
 
 支持的命令行模式：
@@ -147,7 +153,7 @@ session = CHun.process("./challenge")
 
 # ret2libc
 session.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
-# base = session.resolve.libc_base_from_elf_symbol("puts", elf=libc, symbol="puts")
+# base = session.resolve.libc_base_from_elf_symbol("puts", libc_elf=libc, symbol="puts")
 # print(hex(base.value))
 
 # blind leak -> DynELF

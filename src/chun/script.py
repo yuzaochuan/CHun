@@ -69,8 +69,23 @@ class ScriptEntry:
             raise TransportConfigError("CHun.script(...) 需要提供 binary。")
 
         self._elf = ELF(self.target.binary, checksec=False)
-        context._tls["binary"] = self._elf
+        self._set_context_binary(self._elf)
         self._libc = self._load_libc()
+
+    @staticmethod
+    def _set_context_binary(binary: Any) -> None:
+        try:
+            context.binary = binary
+            return
+        except Exception:
+            pass
+
+        tls = getattr(context, "_tls", None)
+        if isinstance(tls, dict):
+            tls["binary"] = binary
+            return
+
+        setattr(context, "binary", binary)
 
     def _load_libc(self) -> Any:
         libc_path = self.target.libc
@@ -114,25 +129,27 @@ class ScriptEntry:
         transport = self._factory._build_pwntools_tube_transport(timeout=self.timeout)
         return self._factory.from_specs(target, transport)
 
-    def start(self) -> "CHunSession":
-        """启动并缓存当前脚本对应的 `CHunSession`。"""
+    def start(self) -> "ScriptEntry":
+        """启动并缓存当前脚本对应的 `CHunSession`，并返回脚本入口自身。"""
         if self._session is None:
             self._session = self._build_session()
-        return self._session
+            self._session.resolve.bind_defaults(elf=self.elf, libc_elf=self.libc)
+        return self
 
     def gdb(self, script: str = "") -> object | None:
         """在 `GDB` 模式下对本地 process session 执行 attach。"""
         if not args.GDB:
             return None
 
-        session = self.start()
+        self.start()
+        session = self.session
         if session.target.kind != "process":
             log.warning("当前为 REMOTE 模式，跳过 GDB attach。")
             return None
         return session.dbg.attach(script=script)
 
     @property
-    def session(self) -> "CHunSession":
+    def as_session(self) -> "CHunSession":
         """返回当前已启动的 session，用于访问完整框架能力。"""
         if self._session is None:
             raise RuntimeError("ScriptEntry 尚未启动，请先调用 start()。")
@@ -238,6 +255,14 @@ class ScriptEntry:
     def ia(self) -> None:
         """`interactive()` 的快捷别名。"""
         self.interactive()
+
+    def __enter__(self) -> "ScriptEntry":
+        self.start()
+        self.session.open()
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        self.session.close()
 
     def __getattr__(self, name: str) -> Any:
         """将未显式声明的低频方法兜底转发到当前 `io`。"""
