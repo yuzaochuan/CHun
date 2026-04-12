@@ -176,7 +176,7 @@ def test_script_start_uses_process_by_default(
     result = entry.start()
 
     assert result is entry
-    assert entry.session is session
+    assert entry.as_session is session
     assert entry.io is session.io
     assert len(calls) == 1
     assert calls[0]["target"].kind == "process"
@@ -332,7 +332,7 @@ def test_script_session_property_requires_start(
     entry = CHun.script("./challenge")
 
     with pytest.raises(RuntimeError):
-        _ = entry.session
+        _ = entry.as_session
 
     with pytest.raises(RuntimeError):
         _ = entry.rec
@@ -398,7 +398,7 @@ def test_script_start_is_chainable(
 
     entry = CHun.script("./challenge").start()
 
-    assert entry.session is session
+    assert entry.as_session is session
     assert entry.rec is session.rec
     assert entry.resolve is session.resolve
 
@@ -419,7 +419,7 @@ def test_script_context_manager_opens_and_closes_session(
     monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
 
     with CHun.script("./challenge") as entry:
-        assert entry.session is session
+        assert entry.as_session is session
 
     assert session.open_calls == 1
     assert session.close_calls == 1

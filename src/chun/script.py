@@ -142,7 +142,7 @@ class ScriptEntry:
             return None
 
         self.start()
-        session = self.session
+        session = self.as_session
         if session.target.kind != "process":
             log.warning("当前为 REMOTE 模式，跳过 GDB attach。")
             return None
@@ -158,7 +158,7 @@ class ScriptEntry:
     @property
     def io(self) -> Any:
         """返回当前 session 的 `io` 入口，适合直接做 tube 交互。"""
-        return self.session.io
+        return self.as_session.io
 
     @property
     def target(self) -> TargetSpec:
@@ -178,27 +178,27 @@ class ScriptEntry:
     @property
     def rec(self) -> EvidenceRegistry:
         """访问 session 的事实记录入口，常用于记录 leak 和 context。"""
-        return self.session.rec
+        return self.as_session.rec
 
     @property
     def infer(self) -> InferenceService:
         """访问 session 的最小 inference 服务。"""
-        return self.session.infer
+        return self.as_session.infer
 
     @property
     def resolve(self) -> ResolveService:
         """访问 session 的解析服务，用于符号、DynELF 等推导。"""
-        return self.session.resolve
+        return self.as_session.resolve
 
     @property
     def dbg(self) -> PwntoolsGdbBridge:
         """访问 session 的交互式 GDB bridge。"""
-        return self.session.dbg
+        return self.as_session.dbg
 
     @property
     def crash(self) -> CorefileAnalyzer:
         """访问 session 的 core dump / crash 分析入口。"""
-        return self.session.crash
+        return self.as_session.crash
 
     def send(self, data: bytes) -> None:
         """转发到当前 `io.send()`。"""
@@ -258,11 +258,11 @@ class ScriptEntry:
 
     def __enter__(self) -> "ScriptEntry":
         self.start()
-        self.session.open()
+        self.as_session.open()
         return self
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
-        self.session.close()
+        self.as_session.close()
 
     def __getattr__(self, name: str) -> Any:
         """将未显式声明的低频方法兜底转发到当前 `io`。"""

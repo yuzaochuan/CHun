@@ -115,7 +115,7 @@ t.gdb("b *main\nc")
 - `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 会显式转发到当前 session
 - `t.resolve.libc_base_from_elf_symbol(..., symbol="puts")` 在脚本态可直接复用默认 `t.libc`，无需重复传 `libc_elf=t.libc`
 - `t.resolve.pie_base_from_elf_symbol(..., symbol="main")` 在脚本态可直接复用默认 `t.elf`
-- 访问 `t.session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
+- 访问 `t.as_session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
 - 高频交互方法可直接使用 `t.sendlineafter()` / `t.recvline()` / `t.interactive()` 及其 alias
 - 低频 tube 方法通过 `__getattr__` fallback 到 `t.io`
 - `with CHun.script(...) as t:` 会自动 `start()` 并打开/关闭底层 transport
