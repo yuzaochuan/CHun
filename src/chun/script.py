@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+import termios
+import tty
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Sequence
 
@@ -18,6 +21,7 @@ if TYPE_CHECKING:
     from .core.session import CHunSession
 
 DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h", "-d")
+POST_ATTACH_GDB_COMMANDS = {"c", "continue", "n", "next", "ni", "nexti"}
 
 
 class ScriptEntry:
@@ -146,9 +150,43 @@ class ScriptEntry:
         if session.target.kind != "process":
             log.warning("当前为 REMOTE 模式，跳过 GDB attach。")
             return None
-        result = session.dbg.attach(script=script)
-        pause()
+        attach_script, post_attach_command = self._split_gdb_script(script)
+        result = session.dbg.attach(script=attach_script)
+        if post_attach_command is not None:
+            session.dbg.run_post_attach(post_attach_command)
+        self._wait_for_debugger_keypress()
         return result
+
+    @staticmethod
+    def _split_gdb_script(script: str) -> tuple[str, str | None]:
+        lines = script.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if not lines:
+            return "", None
+
+        tail = lines[-1].strip().lower()
+        if tail not in POST_ATTACH_GDB_COMMANDS:
+            return script, None
+
+        attach_script = "\n".join(lines[:-1]).rstrip()
+        return attach_script, tail
+
+    @staticmethod
+    def _wait_for_debugger_keypress() -> None:
+        stream = sys.stdin
+        if not hasattr(stream, "isatty") or not stream.isatty():
+            pause()
+            return
+
+        log.info("GDB 已就绪，按任意键继续 exp ...")
+        fd = stream.fileno()
+        old_attrs = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            stream.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
     @property
     def as_session(self) -> "CHunSession":

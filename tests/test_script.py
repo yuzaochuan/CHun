@@ -14,6 +14,7 @@ import chun.script as script_mod
 @dataclass
 class DummyDbg:
     attach_calls: list[dict[str, Any]] = field(default_factory=list)
+    post_attach_calls: list[str] = field(default_factory=list)
 
     def attach(
         self,
@@ -24,6 +25,9 @@ class DummyDbg:
     ) -> str:
         self.attach_calls.append({"io": io, "script": script, "api": api})
         return "attached"
+
+    def run_post_attach(self, command: str) -> None:
+        self.post_attach_calls.append(command)
 
 
 @dataclass
@@ -140,7 +144,7 @@ def test_script_initializes_target_and_runtime_defaults(
     assert entry.target.libc == "/glibc/libc.so.6"
     assert script_mod.context.binary is entry.elf
     assert script_mod.context.log_level in ("debug", 10)
-    assert script_mod.context.terminal == ["tmux", "splitw", "-h"]
+    assert script_mod.context.terminal == ["tmux", "splitw", "-h", "-d"]
     assert fake_pwntools_env["loaded"] == [("./challenge", False)]
 
 
@@ -187,7 +191,7 @@ def test_script_start_uses_process_by_default(
     assert calls[0]["target"].cwd == "/tmp/challenge"
     assert calls[0]["target"].metadata == {
         "log_level": "debug",
-        "terminal": ["tmux", "splitw", "-h"],
+        "terminal": ["tmux", "splitw", "-h", "-d"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout is None
@@ -236,7 +240,7 @@ def test_script_start_uses_remote_when_remote_flag_is_set(
     assert calls[0]["target"].libc == "./libc.so.6"
     assert calls[0]["target"].metadata == {
         "log_level": "info",
-        "terminal": ["tmux", "splitw", "-h"],
+        "terminal": ["tmux", "splitw", "-h", "-d"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout == 1.5
@@ -247,6 +251,11 @@ def test_script_gdb_attaches_for_local_process(
     fake_pwntools_env: dict[str, Any],
 ) -> None:
     session = DummySession(kind="process")
+    wait_calls = 0
+
+    def fake_wait() -> None:
+        nonlocal wait_calls
+        wait_calls += 1
 
     def fake_from_specs(
         cls: type[CHun], target: TargetSpec, transport: Any
@@ -259,15 +268,48 @@ def test_script_gdb_attaches_for_local_process(
     monkeypatch.setattr(script_mod.args, "REMOTE", False)
     monkeypatch.setattr(script_mod.args, "GDB", True)
     monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+    monkeypatch.setattr(
+        script_mod.ScriptEntry, "_wait_for_debugger_keypress", staticmethod(fake_wait)
+    )
 
     entry = CHun.script("./challenge")
     entry.start()
     result = entry.gdb("b *main\nc")
 
     assert result == "attached"
+    assert wait_calls == 1
+    assert session.dbg.attach_calls == [{"io": None, "script": "b *main", "api": True}]
+    assert session.dbg.post_attach_calls == ["c"]
+
+
+def test_script_gdb_keeps_non_control_gdbscript_intact(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", True)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+    monkeypatch.setattr(
+        script_mod.ScriptEntry,
+        "_wait_for_debugger_keypress",
+        staticmethod(lambda: None),
+    )
+
+    entry = CHun.script("./challenge")
+    entry.start()
+    entry.gdb("b *main\nheap")
+
     assert session.dbg.attach_calls == [
-        {"io": None, "script": "b *main\nc", "api": True}
+        {"io": None, "script": "b *main\nheap", "api": True}
     ]
+    assert session.dbg.post_attach_calls == []
 
 
 def test_script_gdb_warns_for_remote_session(

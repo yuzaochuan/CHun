@@ -92,9 +92,33 @@ class PwntoolsGdbBridge:
         )
         return result
 
+    def continue_and_wait(self) -> None:
+        """继续运行目标，直到下一次 stop。"""
+        if self._controller is None or not hasattr(
+            self._controller, "continue_and_wait"
+        ):
+            raise DebuggerBridgeError(
+                "当前 PwntoolsGdbBridge 没有可用的 continue_and_wait 控制器。"
+            )
+        self._controller.continue_and_wait()
+
+    def run_post_attach(self, command: str) -> str | None:
+        """执行 attach 完成后的首条控制命令。"""
+        normalized = command.strip().lower()
+        if normalized in {"c", "continue"}:
+            self.continue_and_wait()
+            return None
+        if normalized in {"n", "next"}:
+            return self.execute("next")
+        if normalized in {"ni", "nexti"}:
+            return self.execute("nexti")
+        raise DebuggerBridgeError(f"不支持的 GDB post-attach 命令：{command}")
+
     def _controller_execute(self, command: str) -> str:
         if self._controller is None or not hasattr(self._controller, "execute"):
-            raise DebuggerBridgeError("当前 PwntoolsGdbBridge 没有可用的 GDB API 控制器。")
+            raise DebuggerBridgeError(
+                "当前 PwntoolsGdbBridge 没有可用的 GDB API 控制器。"
+            )
         result = self._controller.execute(command)
         return "" if result is None else str(result)
 
@@ -122,7 +146,9 @@ class PwntoolsGdbBridge:
         output = self.execute("info registers")
         registers: dict[str, int] = {}
         for line in output.splitlines():
-            match = re.match(r"^([a-zA-Z][a-zA-Z0-9]+)\s+0x([0-9a-fA-F]+)", line.strip())
+            match = re.match(
+                r"^([a-zA-Z][a-zA-Z0-9]+)\s+0x([0-9a-fA-F]+)", line.strip()
+            )
             if not match:
                 continue
             registers[match.group(1)] = int(match.group(2), 16)
@@ -143,7 +169,11 @@ class PwntoolsGdbBridge:
         mappings: list[dict[str, object]] = []
         for line in output.splitlines():
             parts = line.split()
-            if len(parts) < 5 or not parts[0].startswith("0x") or not parts[1].startswith("0x"):
+            if (
+                len(parts) < 5
+                or not parts[0].startswith("0x")
+                or not parts[1].startswith("0x")
+            ):
                 continue
             entry = {
                 "start": int(parts[0], 16),
