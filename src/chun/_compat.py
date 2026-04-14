@@ -47,7 +47,7 @@ except Exception:  # pragma: no cover
 
         binary: Any = None
         log_level: str = "info"
-        terminal: list[str] = ["tmux", "splitw", "-h"]
+        terminal: list[str] = ["tmux", "splitw", "-h", "-d"]
 
     class _FallbackLog:
         """简单日志适配器，接口尽量贴合 pwntools 的 ``log``。"""

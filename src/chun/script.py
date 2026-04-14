@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Sequence
 
-from ._compat import ELF, args, context, log
+from ._compat import ELF, args, context, log, pause
 from .bridges.gdb import PwntoolsGdbBridge
 from .core.analysis import CorefileAnalyzer
 from .core.errors import TransportConfigError
@@ -17,7 +17,7 @@ from .core.resolve import ResolveService
 if TYPE_CHECKING:
     from .core.session import CHunSession
 
-DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h")
+DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h", "-d")
 
 
 class ScriptEntry:
@@ -37,7 +37,7 @@ class ScriptEntry:
         cwd: str | None = None,
         timeout: float | None = None,
         log_level: str = "debug",
-        terminal: Sequence[str] = ("tmux", "splitw", "-h"),
+        terminal: Sequence[str] = DEFAULT_SCRIPT_TERMINAL,
     ) -> None:
         self._factory = factory
         resolved_terminal = tuple(terminal) if terminal else DEFAULT_SCRIPT_TERMINAL
@@ -146,7 +146,9 @@ class ScriptEntry:
         if session.target.kind != "process":
             log.warning("当前为 REMOTE 模式，跳过 GDB attach。")
             return None
-        return session.dbg.attach(script=script)
+        result = session.dbg.attach(script=script)
+        pause()
+        return result
 
     @property
     def as_session(self) -> "CHunSession":
