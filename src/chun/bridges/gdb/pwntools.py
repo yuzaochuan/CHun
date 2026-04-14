@@ -92,27 +92,24 @@ class PwntoolsGdbBridge:
         )
         return result
 
-    def continue_and_wait(self) -> None:
-        """继续运行目标，直到下一次 stop。"""
-        if self._controller is None or not hasattr(
-            self._controller, "continue_and_wait"
-        ):
-            raise DebuggerBridgeError(
-                "当前 PwntoolsGdbBridge 没有可用的 continue_and_wait 控制器。"
-            )
-        self._controller.continue_and_wait()
-
-    def run_post_attach(self, command: str) -> str | None:
-        """执行 attach 完成后的首条控制命令。"""
-        normalized = command.strip().lower()
-        if normalized in {"c", "continue"}:
-            self.continue_and_wait()
-            return None
-        if normalized in {"n", "next"}:
-            return self.execute("next")
-        if normalized in {"ni", "nexti"}:
-            return self.execute("nexti")
-        raise DebuggerBridgeError(f"不支持的 GDB post-attach 命令：{command}")
+    def bind_runtime(
+        self, *, controller: object | None = None, pid: object | None = None
+    ) -> None:
+        """将通过其它方式启动的 GDB runtime 绑定到当前 bridge。"""
+        self._controller = controller
+        self._gdb_pid = pid
+        self.registry.set_context(
+            "debugger.attached",
+            controller is not None or pid is not None,
+            kind=ContextKind.SESSION,
+            domain=RecordDomain.DEBUGGER,
+        )
+        self.registry.set_context(
+            "debugger.attach.pid",
+            self._gdb_pid,
+            kind=ContextKind.SESSION,
+            domain=RecordDomain.DEBUGGER,
+        )
 
     def _controller_execute(self, command: str) -> str:
         if self._controller is None or not hasattr(self._controller, "execute"):

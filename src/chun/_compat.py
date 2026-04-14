@@ -87,6 +87,10 @@ except Exception:  # pragma: no cover
         def attach(*_args: Any, **_kwargs: Any) -> None:
             raise _runtime_error("gdb.attach")
 
+        @staticmethod
+        def debug(*_args: Any, **_kwargs: Any) -> None:
+            raise _runtime_error("gdb.debug")
+
     args = _Args()
     context = _Context()
     gdb = _Gdb()

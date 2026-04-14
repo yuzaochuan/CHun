@@ -14,7 +14,7 @@ import chun.script as script_mod
 @dataclass
 class DummyDbg:
     attach_calls: list[dict[str, Any]] = field(default_factory=list)
-    post_attach_calls: list[str] = field(default_factory=list)
+    bind_runtime_calls: list[dict[str, Any]] = field(default_factory=list)
 
     def attach(
         self,
@@ -26,8 +26,10 @@ class DummyDbg:
         self.attach_calls.append({"io": io, "script": script, "api": api})
         return "attached"
 
-    def run_post_attach(self, command: str) -> None:
-        self.post_attach_calls.append(command)
+    def bind_runtime(
+        self, *, controller: object | None = None, pid: object | None = None
+    ) -> None:
+        self.bind_runtime_calls.append({"controller": controller, "pid": pid})
 
 
 @dataclass
@@ -251,11 +253,6 @@ def test_script_gdb_attaches_for_local_process(
     fake_pwntools_env: dict[str, Any],
 ) -> None:
     session = DummySession(kind="process")
-    wait_calls = 0
-
-    def fake_wait() -> None:
-        nonlocal wait_calls
-        wait_calls += 1
 
     def fake_from_specs(
         cls: type[CHun], target: TargetSpec, transport: Any
@@ -268,21 +265,93 @@ def test_script_gdb_attaches_for_local_process(
     monkeypatch.setattr(script_mod.args, "REMOTE", False)
     monkeypatch.setattr(script_mod.args, "GDB", True)
     monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
-    monkeypatch.setattr(
-        script_mod.ScriptEntry, "_wait_for_debugger_keypress", staticmethod(fake_wait)
-    )
 
     entry = CHun.script("./challenge")
     entry.start()
     result = entry.gdb("b *main\nc")
 
     assert result == "attached"
+    assert session.dbg.attach_calls == [
+        {"io": None, "script": "b *main\nc", "api": True}
+    ]
+
+
+def test_script_debug_starts_process_under_gdb_and_waits_for_keypress(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    wait_calls = 0
+
+    class FakeController:
+        pass
+
+    class FakeDebugTube(DummyIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gdb = FakeController()
+
+    created: list[dict[str, Any]] = []
+    debug_tube = FakeDebugTube()
+
+    def fake_debug(
+        argv: list[str],
+        gdbscript: str | None = None,
+        exe: str | None = None,
+        env: dict[str, str] | None = None,
+        api: bool = False,
+        cwd: str | None = None,
+    ) -> FakeDebugTube:
+        created.append(
+            {
+                "argv": argv,
+                "gdbscript": gdbscript,
+                "exe": exe,
+                "env": env,
+                "api": api,
+                "cwd": cwd,
+            }
+        )
+        return debug_tube
+
+    def fake_wait() -> None:
+        nonlocal wait_calls
+        wait_calls += 1
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", True)
+    monkeypatch.setattr(script_mod.gdb, "debug", fake_debug)
+    monkeypatch.setattr(
+        script_mod.ScriptEntry,
+        "_wait_for_debugger_keypress",
+        staticmethod(fake_wait),
+    )
+
+    entry = CHun.script(
+        "./challenge",
+        argv=["./challenge", "--fast"],
+        env={"MODE": "1"},
+        cwd="/tmp/challenge",
+    )
+    result = entry.debug("b *main\nc")
+
+    assert result is entry
+    assert created == [
+        {
+            "argv": ["./challenge", "--fast"],
+            "gdbscript": "b *main\nc",
+            "exe": "./challenge",
+            "env": {"MODE": "1"},
+            "api": True,
+            "cwd": "/tmp/challenge",
+        }
+    ]
     assert wait_calls == 1
-    assert session.dbg.attach_calls == [{"io": None, "script": "b *main", "api": True}]
-    assert session.dbg.post_attach_calls == ["c"]
+    assert entry.dbg._controller is debug_tube.gdb
+    assert entry.sendline(b"PING") is None
+    assert debug_tube.calls[-1] == ("sendline", (b"PING",), {})
 
 
-def test_script_gdb_keeps_non_control_gdbscript_intact(
+def test_script_debug_falls_back_to_start_when_gdb_flag_is_off(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
 ) -> None:
@@ -294,22 +363,13 @@ def test_script_gdb_keeps_non_control_gdbscript_intact(
         return session
 
     monkeypatch.setattr(script_mod.args, "REMOTE", False)
-    monkeypatch.setattr(script_mod.args, "GDB", True)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
     monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
-    monkeypatch.setattr(
-        script_mod.ScriptEntry,
-        "_wait_for_debugger_keypress",
-        staticmethod(lambda: None),
-    )
 
     entry = CHun.script("./challenge")
-    entry.start()
-    entry.gdb("b *main\nheap")
 
-    assert session.dbg.attach_calls == [
-        {"io": None, "script": "b *main\nheap", "api": True}
-    ]
-    assert session.dbg.post_attach_calls == []
+    assert entry.debug("b *main") is entry
+    assert entry.as_session is session
 
 
 def test_script_gdb_warns_for_remote_session(

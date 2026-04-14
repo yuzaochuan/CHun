@@ -8,7 +8,7 @@ import tty
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Sequence
 
-from ._compat import ELF, args, context, log, pause
+from ._compat import ELF, args, context, gdb, log, pause
 from .bridges.gdb import PwntoolsGdbBridge
 from .core.analysis import CorefileAnalyzer
 from .core.errors import TransportConfigError
@@ -16,12 +16,12 @@ from .core.inference import InferenceService
 from .core.models import TargetSpec
 from .core.registry import EvidenceRegistry
 from .core.resolve import ResolveService
+from .transports.pwntools_tube import PwntoolsTubeTransport
 
 if TYPE_CHECKING:
     from .core.session import CHunSession
 
 DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h", "-d")
-POST_ATTACH_GDB_COMMANDS = {"c", "continue", "n", "next", "ni", "nexti"}
 
 
 class ScriptEntry:
@@ -150,27 +150,44 @@ class ScriptEntry:
         if session.target.kind != "process":
             log.warning("当前为 REMOTE 模式，跳过 GDB attach。")
             return None
-        attach_script, post_attach_command = self._split_gdb_script(script)
-        result = session.dbg.attach(script=attach_script)
-        if post_attach_command is not None:
-            session.dbg.run_post_attach(post_attach_command)
+        return session.dbg.attach(script=script)
+
+    def debug(self, script: str = "") -> "ScriptEntry":
+        """在 `GDB` 下启动本地 process，并将 tube 接入当前脚本入口。"""
+        if not args.GDB:
+            return self.start()
+
+        self.start()
+        session = self.as_session
+        if session.target.kind != "process":
+            raise TransportConfigError("ScriptEntry.debug() 仅支持本地 process 目标。")
+        if not isinstance(session.transport, PwntoolsTubeTransport):
+            raise TransportConfigError(
+                "ScriptEntry.debug() 仅支持 pwntools-tube transport。"
+            )
+        if session.transport.is_open:
+            session.close()
+
+        argv = list(session.target.argv)
+        if not argv:
+            if session.target.binary is None:
+                raise TransportConfigError("process 模式至少需要 binary 或 argv。")
+            argv = [session.target.binary]
+
+        debug_tube = gdb.debug(
+            argv,
+            gdbscript=script or None,
+            exe=session.target.binary,
+            env=session.target.env or None,
+            api=True,
+            cwd=session.target.cwd,
+        )
+        session.transport.adopt_tube(debug_tube)
+        session.dbg.bind_runtime(controller=getattr(debug_tube, "gdb", None))
+        if hasattr(session, "_sync_transport_context"):
+            session._sync_transport_context()
         self._wait_for_debugger_keypress()
-        return result
-
-    @staticmethod
-    def _split_gdb_script(script: str) -> tuple[str, str | None]:
-        lines = script.splitlines()
-        while lines and not lines[-1].strip():
-            lines.pop()
-        if not lines:
-            return "", None
-
-        tail = lines[-1].strip().lower()
-        if tail not in POST_ATTACH_GDB_COMMANDS:
-            return script, None
-
-        attach_script = "\n".join(lines[:-1]).rstrip()
-        return attach_script, tail
+        return self
 
     @staticmethod
     def _wait_for_debugger_keypress() -> None:

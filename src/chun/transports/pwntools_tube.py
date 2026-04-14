@@ -99,6 +99,12 @@ class PwntoolsTubeTransport(BaseTransport):
         self._tube = None
         self._ssh_client = None
 
+    def adopt_tube(self, tube: Any) -> None:
+        """接管一个已由外部创建好的 pwntools tube。"""
+        self._configure_context()
+        self._tube = tube
+        self._is_open = True
+
     @property
     def raw(self) -> Any:
         return self._tube

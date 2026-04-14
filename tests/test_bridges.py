@@ -26,10 +26,6 @@ class DummyTransport:
 class FakeGdbController:
     def __init__(self) -> None:
         self.commands: list[str] = []
-        self.continue_calls = 0
-
-    def continue_and_wait(self) -> None:
-        self.continue_calls += 1
 
     def execute(self, command: str) -> str:
         self.commands.append(command)
@@ -76,38 +72,18 @@ def test_pwntools_gdb_bridge_attach_and_execute_write_back_to_registry() -> None
     assert output == "ok:echo test"
     assert regs["rip"] == 0x401000
     assert maps[0]["start"] == 0x400000
-    assert controller.continue_calls == 0
     assert session.registry.get_context("debugger.attach.pid").value == 4242
     assert session.registry.get_artifact("debugger.gdbscript") is not None
 
 
-def test_pwntools_gdb_bridge_run_post_attach_uses_controller_api_for_continue() -> None:
+def test_pwntools_gdb_bridge_bind_runtime_updates_controller_context() -> None:
     session = _build_session()
     controller = FakeGdbController()
 
-    def fake_attach(
-        target: object,
-        gdbscript: str = "",
-        exe: str | None = None,
-        api: bool = False,
-    ) -> object:
-        if api:
-            return (4242, controller)
-        return 4242
+    session.dbg.bind_runtime(controller=controller, pid=5150)
 
-    session.dbg = PwntoolsGdbBridge(
-        session.registry,
-        session.target,
-        lambda: session.raw,
-        attach_fn=fake_attach,
-    )
-    session.transport.open()
-
-    session.dbg.attach(script="b *main", api=True)
-    result = session.dbg.run_post_attach("c")
-
-    assert result is None
-    assert controller.continue_calls == 1
+    assert session.registry.get_context("debugger.attached").value is True
+    assert session.registry.get_context("debugger.attach.pid").value == 5150
 
 
 class FakeStdout:
