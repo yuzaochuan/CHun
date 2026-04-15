@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable, Mapping, Protocol, SupportsInt
 
 from ...bridges.pwntools import MemLeakAdapter
+from ..catalog import LibcCatalogService
 from ..errors import ResolverError
 from ..inference import InferenceService
 from ..models import BaseInferenceResult, RecordDomain, ResolvedSymbolResult
@@ -26,11 +27,13 @@ class ResolveService:
         registry: EvidenceRegistry,
         infer: InferenceService,
         *,
+        catalog_service: LibcCatalogService | None = None,
         memleak_adapter_cls: type[MemLeakAdapter] = MemLeakAdapter,
         dynelf_resolver_cls: type[DynELFResolver] = DynELFResolver,
     ) -> None:
         self.registry = registry
         self.infer = infer
+        self.catalog_service = catalog_service if catalog_service is not None else infer.libc_catalog
         self.memleak_adapter_cls = memleak_adapter_cls
         self.dynelf_resolver = dynelf_resolver_cls(registry, adapter_cls=memleak_adapter_cls)
         self.default_elf: object | None = None
@@ -137,6 +140,33 @@ class ResolveService:
             symbol_offset=symbol_offset,
             fact_name=fact_name,
         )
+
+    def symbol(self, name: str) -> int:
+        """基于已确认的 libc base/version 计算绝对地址。"""
+        if self.catalog_service is None:
+            raise ResolverError("缺少 catalog_service 依赖。")
+
+        base_record = self.registry.get_fact("libc.base")
+        if base_record is None:
+            observation = self.registry.get_observation("libc.base")
+            base_value = observation.value if observation is not None else None
+        else:
+            base_value = base_record.value
+        if not isinstance(base_value, int):
+            raise ResolverError("缺少已确认的 libc.base。")
+
+        version_fact = self.registry.get_fact("libc.version")
+        if version_fact is None:
+            raise ResolverError("缺少已确认的 libc.version。")
+        libc_id = version_fact.metadata.get("libc_id")
+        if not isinstance(libc_id, int):
+            raise ResolverError("libc.version 缺少 libc_id 元数据。")
+
+        try:
+            offset = self.catalog_service.get_offset(libc_id, name)
+        except Exception as exc:
+            raise ResolverError(f"无法解析符号 {name}。") from exc
+        return base_value + offset
 
 
 __all__ = ["ResolveService"]

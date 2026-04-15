@@ -33,6 +33,7 @@
   - `schema.sql`
   - `repository.py`
   - `builder.py`
+  - `service.py`
 - `src/chun/core/session.py`
   - `CHunSession`
 - `src/chun/transports`
@@ -53,7 +54,11 @@
 - `catalog/schema.sql` 反向围绕高频检索建模，核心是 `symbols(libc_id, symbol_name)` 复合主键、`WITHOUT ROWID`、`offset_12bit` 和 `score`
 - `catalog/builder.py` 与 `scripts/build_libc_db.py` 负责离线构建 `data/libc/libc.db`，并支持核心符号模式与 `--all` 全量模式
 
-当前阶段只完成 schema、repository 和 builder，尚未把候选检索接回 `InferenceService`，这样可以保证现有 base 推导与 resolve 行为完全不变。
+当前阶段 catalog 已经接回到 session 工作流里，但仍然保持边界清晰：
+
+- `catalog/service.py` 负责服务层归一化与 façade，不泄漏 SQL 到 inference / resolve
+- `InferenceService` 负责调度“泄漏 -> catalog 检索 -> artifact/fact 回写”，并在版本被确认后自动补齐 `libc.base`
+- `ResolveService` 负责消费 `libc.base + libc.version` 并换算绝对地址
 
 ## Libc Catalog 构建策略
 
@@ -63,6 +68,7 @@
 - `--all` 模式：保留全部符号；词典外符号以低分 `0.1` 写入
 - `priority: 1/2/3` 会分别映射到 `10.0/3.0/1.0`
 - `repository.find_candidates(require_all=False)` 会按 `SUM(score)` 而不是单纯按命中个数排序
+- 服务层查询前会做动态名称归一化：先剥离 `@got` / `_plt` / `_got.plt` 等后缀，再按词典把 alias 映射到规范名
 
 ## 第二阶段目标
 
@@ -92,6 +98,7 @@
 - `session.gdb_mi`
 - `session.resolve`
 - `session.crash`
+- `session.libc_catalog`
 
 本轮收口后，面向后续插件开发的公开入口已经固定在这组字段上；下一阶段应优先复用这些入口，而不是继续新增临时 facade。
 
@@ -114,7 +121,7 @@
 
 - transport 可以写入 context
 - session 可以统一访问 observation / fact / artifact / context
-- inference 可以从 observation 读取并写回 fact
+- inference 可以从 observation 读取并写回 fact，也可以回写 `libc.candidates` / `libc.version`
 - 后续插件可以稳定依赖这层事实模型
 
 ## 第三轮目标

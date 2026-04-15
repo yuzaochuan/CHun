@@ -4,7 +4,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from chun.core.catalog import LibcCatalogRepository, build_libc_database, load_schema
+from chun.core.catalog import LibcCatalogRepository, LibcCatalogService, build_libc_database, load_schema
+from chun.core.errors import RegistryNotFoundError
 from chun.core.models import LibcLeakConstraint
 
 
@@ -200,3 +201,46 @@ def test_build_all_mode_keeps_unknown_symbols_with_low_score(tmp_path: Path) -> 
         assert meta_rows["build_mode"] == "all"
     finally:
         connection.close()
+
+
+def test_catalog_service_normalizes_aliases_and_suffixes(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    output_path = tmp_path / "libc.db"
+    payload = [
+        {
+            "name": "glibc-service-amd64",
+            "arch": "amd64",
+            "symbols": {
+                "puts": "0x080aa0",
+                "scanf": "0x021ab0",
+                "str_bin_sh": "0x044444",
+            },
+        }
+    ]
+    (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
+    build_libc_database(raw_dir=raw_dir, output_path=output_path, include_all=True)
+
+    service = LibcCatalogService(db_path=output_path)
+    try:
+        result = service.find_candidates(
+            {
+                "puts@got": 0x7F0000000000 + 0x080AA0,
+                "scanf_plt": 0x7F0000000000 + 0x021AB0,
+            },
+            arch="amd64",
+        )
+        assert [candidate.name for candidate in result.candidates] == ["glibc-service-amd64"]
+
+        assert service.get_offset(1, "puts@got") == 0x080AA0
+        assert service.get_offset(1, "scanf_plt") == 0x021AB0
+        assert service.get_offset(1, "str_bin_sh") == 0x044444
+
+        try:
+            service.get_offset(1, "system")
+        except RegistryNotFoundError:
+            pass
+        else:
+            raise AssertionError("expected RegistryNotFoundError")
+    finally:
+        service.close()

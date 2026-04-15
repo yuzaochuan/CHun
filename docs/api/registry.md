@@ -106,7 +106,32 @@
 
 1. 调用 SQLite catalog 检索候选
 2. 把完整 `LibcSearchResult` 写入 artifact，默认名为 `libc.candidates`
-3. 若候选唯一，则自动写入 `libc.version` fact
+3. 若候选唯一，或显式传入 `index` 命中候选，则自动写入 `libc.version` fact
+4. 一旦版本被确认，会立刻基于任一 leak 自动写入 `libc.base` fact
+
+`session.infer.search_libc()` 进一步把“扫描 registry -> 组装 leaks -> 调 catalog”这一层也封装起来：
+
+1. 只扫描 `domain=LIBC` 且 `kind=SYMBOL_LEAK` 的 observation
+2. 跳过非整数地址
+3. 同名 symbol 出现多次时，优先采用更高 `confidence` 的记录
+4. 支持 `index=...`，用于多候选场景下按排名静默确认目标版本
+5. 若没有可用 leak，则抛 `InferenceInputError`
+
+若命中多个候选且没有传 `index`，系统会保留 `libc.candidates` artifact，并输出候选列表供外部爆破逻辑使用，但不会写入 `libc.version` / `libc.base`。
+
+`session.resolve.symbol(name)` 则会继续消费事实层：
+
+1. 读取 `libc.base`
+2. 读取 `libc.version.metadata["libc_id"]`
+3. 通过本地 SQLite catalog 查询 offset
+4. 返回 `libc.base + offset`
+
+这里的 `name` 支持服务层归一化，因此 `puts@got`、`write_plt`、`str_bin_sh` 这类常见写法都可以直接传入，不需要污染底层 catalog 表结构。
+
+脚本态还提供两个只读快捷属性：
+
+- `t.libc_base`
+- `t.libc_version`
 
 ## 当前推荐入口
 

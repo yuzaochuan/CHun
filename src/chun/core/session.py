@@ -8,6 +8,7 @@ from typing import Any
 from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
 from ..transports.base import BaseTransport
 from .analysis import CorefileAnalyzer
+from .catalog import LibcCatalogService
 from .inference import InferenceService
 from .models import ContextKind, RecordDomain, TargetSpec, TransportSpec
 from .registry import EvidenceRegistry
@@ -33,6 +34,7 @@ class CHunSession:
     transport_spec: TransportSpec
     transport: BaseTransport
     registry: EvidenceRegistry = field(default_factory=EvidenceRegistry)
+    libc_catalog: LibcCatalogService = field(default_factory=LibcCatalogService)
     infer: InferenceService = field(init=False)
     dbg: PwntoolsGdbBridge = field(init=False)
     gdb_mi: GdbMiBridge = field(init=False)
@@ -40,10 +42,10 @@ class CHunSession:
     crash: CorefileAnalyzer = field(init=False)
 
     def __post_init__(self) -> None:
-        self.infer = InferenceService(self.registry)
+        self.infer = InferenceService(self.registry, libc_catalog=self.libc_catalog)
         self.dbg = PwntoolsGdbBridge(self.registry, self.target, lambda: self.raw)
         self.gdb_mi = GdbMiBridge(self.registry, self.target)
-        self.resolve = ResolveService(self.registry, self.infer)
+        self.resolve = ResolveService(self.registry, self.infer, catalog_service=self.libc_catalog)
         self.crash = CorefileAnalyzer(self.registry)
         self._seed_context()
 

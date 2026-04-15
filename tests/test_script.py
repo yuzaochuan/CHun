@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 
 from chun import CHun
+from chun.core.models import FactKind, RecordDomain
+from chun.core.registry import EvidenceRegistry
 from chun.core.models import TargetSpec
 import chun.script as script_mod
 
@@ -118,8 +120,8 @@ def fake_pwntools_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     tls = getattr(script_mod.context, "_tls", None)
     if isinstance(tls, dict) and "binary" in tls:
         del tls["binary"]
-    if hasattr(script_mod.context, "binary"):
-        monkeypatch.setattr(script_mod.context, "binary", None)
+    if isinstance(tls, dict):
+        tls["binary"] = None
     monkeypatch.setattr(script_mod.context, "log_level", "info")
     monkeypatch.setattr(script_mod.context, "terminal", [])
     return {"loaded": loaded, "auto_libc": auto_libc}
@@ -144,7 +146,11 @@ def test_script_initializes_target_and_runtime_defaults(
     assert entry.elf.path == "./challenge"
     assert entry.libc is fake_pwntools_env["auto_libc"]
     assert entry.target.libc == "/glibc/libc.so.6"
-    assert script_mod.context.binary is entry.elf
+    tls = getattr(script_mod.context, "_tls", None)
+    if isinstance(tls, dict):
+        assert tls.get("binary") is entry.elf
+    else:
+        assert getattr(tls, "binary", None) is entry.elf or script_mod.context.binary is entry.elf
     assert script_mod.context.log_level in ("debug", 10)
     assert script_mod.context.terminal == ["tmux", "splitw", "-h", "-d"]
     assert fake_pwntools_env["loaded"] == [("./challenge", False)]
@@ -503,6 +509,63 @@ def test_script_start_is_chainable(
     assert entry.as_session is session
     assert entry.rec is session.rec
     assert entry.resolve is session.resolve
+
+
+def test_script_exposes_libc_fact_shortcuts(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    registry = EvidenceRegistry()
+    registry.record_fact(
+        "libc.base",
+        0x7F0000000000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+    registry.record_fact(
+        "libc.version",
+        "glibc-test",
+        kind=FactKind.VERSION,
+        domain=RecordDomain.LIBC,
+    )
+    session.rec = registry
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.libc_base == 0x7F0000000000
+    assert entry.libc_version == "glibc-test"
+
+
+def test_script_libc_base_raises_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(RuntimeError, match="libc.base 尚未推导"):
+        _ = entry.libc_base
 
 
 def test_script_context_manager_opens_and_closes_session(
