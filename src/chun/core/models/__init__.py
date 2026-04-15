@@ -1,6 +1,7 @@
 """核心模型导出。"""
 
 from .analysis import CrashAnalysisResult, GdbMiResult, ResolvedSymbolResult
+from .catalog import LibcCandidate, LibcLeakConstraint, LibcSearchResult
 from .records import (
     Artifact,
     ArtifactKind,
@@ -26,6 +27,9 @@ __all__ = [
     "Fact",
     "FactKind",
     "GdbMiResult",
+    "LibcCandidate",
+    "LibcLeakConstraint",
+    "LibcSearchResult",
     "Observation",
     "ObservationKind",
     "RecordDomain",

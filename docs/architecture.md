@@ -8,6 +8,7 @@
 - `TransportSpec`：这次要怎么连
 - `Transport`：真正负责生命周期与 IO
 - `CHunSession`：最小可用 runtime 入口
+- `Libc Catalog`：独立于 registry 的 sqlite 知识库边界
 
 ## 为什么先重建 Transport 层
 
@@ -25,6 +26,13 @@
 - `src/chun/core/models`
   - `TargetSpec`
   - `TransportSpec`
+  - `LibcLeakConstraint`
+  - `LibcCandidate`
+  - `LibcSearchResult`
+- `src/chun/core/catalog`
+  - `schema.sql`
+  - `repository.py`
+  - `builder.py`
 - `src/chun/core/session.py`
   - `CHunSession`
 - `src/chun/transports`
@@ -35,6 +43,26 @@
   - `build_transport()`
 - `src/chun/facade.py`
   - `CHun.process()/remote()/ssh_process()/http()/websocket()/blind()`
+
+## Libc Catalog 的边界
+
+新的 libc catalog 不取代 `EvidenceRegistry`，而是把“海量 libc 版本元信息 + symbol offset 检索”独立放进 SQLite：
+
+- `registry` 继续只负责当前会话内的 observation / fact / artifact / context
+- `catalog/repository.py` 负责封装所有 SQL，并通过 `sqlite3.Row` 返回结构化候选
+- `catalog/schema.sql` 反向围绕高频检索建模，核心是 `symbols(libc_id, symbol_name)` 复合主键、`WITHOUT ROWID`、`offset_12bit` 和 `score`
+- `catalog/builder.py` 与 `scripts/build_libc_db.py` 负责离线构建 `data/libc/libc.db`，并支持核心符号模式与 `--all` 全量模式
+
+当前阶段只完成 schema、repository 和 builder，尚未把候选检索接回 `InferenceService`，这样可以保证现有 base 推导与 resolve 行为完全不变。
+
+## Libc Catalog 构建策略
+
+当前构建流程会优先读取 `src/chun/core/catalog/catalog_symbols.yaml` 里的核心符号词典：
+
+- 默认模式：只保留词典中定义的规范名与 alias，对应写入权重分数
+- `--all` 模式：保留全部符号；词典外符号以低分 `0.1` 写入
+- `priority: 1/2/3` 会分别映射到 `10.0/3.0/1.0`
+- `repository.find_candidates(require_all=False)` 会按 `SUM(score)` 而不是单纯按命中个数排序
 
 ## 第二阶段目标
 

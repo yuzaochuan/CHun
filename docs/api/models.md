@@ -17,6 +17,9 @@
 - `ResolvedSymbolResult`
 - `CrashAnalysisResult`
 - `GdbMiResult`
+- `LibcLeakConstraint`
+- `LibcCandidate`
+- `LibcSearchResult`
 
 ## `TargetSpec`
 
@@ -80,6 +83,16 @@
 - `GdbMiResult`：承载结构化 GDB/MI 命令结果
 
 模型层让 Registry 不只是“存值”，而是“存值 + 存上下文 + 存可信度”。
+
+## Libc Catalog 模型
+
+新增的 libc catalog DTO 只服务于“版本候选检索”这条链路，不参与现有 `EvidenceRegistry` 的会话内事实存储：
+
+- `LibcLeakConstraint`：描述单条符号泄漏约束，内置 `offset_12bit` 便于直接映射 SQLite 检索键。
+- `LibcCandidate`：描述单个 libc 候选，保留 `libc_id` / `name` / `arch` / `build_id` 与匹配结果。
+- `LibcSearchResult`：描述一次查询的完整返回，包含约束集合、候选列表、是否存在精确匹配以及查询模式。
+
+这组模型的目标是让未来的 `InferenceService` 只消费结构化对象，而不是直接拼接 SQL。
 
 `BaseInferenceResult` 当前暴露：
 

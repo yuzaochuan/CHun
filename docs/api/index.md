@@ -32,6 +32,12 @@
 
 ## 数据模型与枚举
 
-职责：提供 `TargetSpec` / `TransportSpec` 以及 Registry 相关数据模型。
+职责：提供 `TargetSpec` / `TransportSpec`、Registry 相关数据模型，以及 libc catalog 的结构化查询结果对象。
 
 详见：[Models API](models.md)
+
+## Libc Catalog
+
+职责：提供独立于 `EvidenceRegistry` 的 SQLite libc 版本库边界；builder 现已支持核心符号筛选、`--all` 全量构建模式和基于 `score` 的候选排序。
+
+详见：[架构设计](../architecture.md)
