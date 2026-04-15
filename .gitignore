@@ -227,3 +227,5 @@ __marimo__/
 data/libc/raw/
 data/libc/*.db-journal
 data/libc/*.db-wal
+# 91个核心libc偏移数据库，文件大小40kb 
+!data/libc/libc.db
