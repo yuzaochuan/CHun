@@ -92,8 +92,12 @@ from pwn import *
 t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
 t.start()
 
+# 或者直接链式写：
+# t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6").start()
+
 t.sla(b"menu> ", b"1")
 t.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+t.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
 t.gdb("b *main\nc")
 ```
 
@@ -106,10 +110,15 @@ t.gdb("b *main\nc")
 - 传 `GDB` 且当前 session 是本地 process 时，`t.gdb()` 调用现有 `session.dbg.attach()`
 - `REMOTE GDB` 时只 warning，不会 attach
 - `t.target` 是当前脚本入口使用的 `TargetSpec` 配置对象
+- `t.start()` 返回 `t` 自身，因此 `t = CHun.script(...).start()` 与 `t = CHun.script(...); t.start()` 都可用
+- `t.start()` 会把脚本态已加载的 `t.elf` / `t.libc` 绑定为 `t.resolve` 的默认解析对象
 - `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 会显式转发到当前 session
-- 访问 `t.session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
+- `t.resolve.libc_base_from_elf_symbol(..., symbol="puts")` 在脚本态可直接复用默认 `t.libc`，无需重复传 `libc_elf=t.libc`
+- `t.resolve.pie_base_from_elf_symbol(..., symbol="main")` 在脚本态可直接复用默认 `t.elf`
+- 访问 `t.as_session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
 - 高频交互方法可直接使用 `t.sendlineafter()` / `t.recvline()` / `t.interactive()` 及其 alias
 - 低频 tube 方法通过 `__getattr__` fallback 到 `t.io`
+- `with CHun.script(...) as t:` 会自动 `start()` 并打开/关闭底层 transport
 
 ---
 

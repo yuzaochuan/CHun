@@ -38,6 +38,7 @@
 
 - `memleak(leak_primitive, ...)`
 - `symbol_via_dynelf(symbol, ..., pointer=...)`
+- `bind_defaults(elf=..., libc_elf=...)`
 - `libc_base_from_elf_symbol(observation_name, libc_elf=..., symbol=...)`
 - `pie_base_from_elf_symbol(observation_name, elf=..., symbol=...)`
 
@@ -49,6 +50,9 @@
 - session.registry
 
 收敛到同一条工作流里。
+
+如果当前会话已经显式绑定了默认 `elf` / `libc_elf`，后续 `libc_base_from_elf_symbol()` 与 `pie_base_from_elf_symbol()` 可省略对应对象参数。
+`CHun.script().start()` 会自动把脚本态的 `t.elf` / `t.libc` 绑定到 `t.resolve`。
 
 ## `session.crash`
 
@@ -76,6 +80,11 @@ result = session.resolve.libc_base_from_elf_symbol(
     libc_elf=libc,
     symbol="puts",
 )
+
+# script 场景：
+# t = CHun.script("./challenge", libc="./libc.so.6")
+# t.start()
+# result = t.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
 ```
 
 ### blind leak -> DynELF

@@ -14,6 +14,7 @@ import chun.script as script_mod
 @dataclass
 class DummyDbg:
     attach_calls: list[dict[str, Any]] = field(default_factory=list)
+    bind_runtime_calls: list[dict[str, Any]] = field(default_factory=list)
 
     def attach(
         self,
@@ -24,6 +25,11 @@ class DummyDbg:
     ) -> str:
         self.attach_calls.append({"io": io, "script": script, "api": api})
         return "attached"
+
+    def bind_runtime(
+        self, *, controller: object | None = None, pid: object | None = None
+    ) -> None:
+        self.bind_runtime_calls.append({"controller": controller, "pid": pid})
 
 
 @dataclass
@@ -69,13 +75,26 @@ class DummySession:
     kind: str
     io: DummyIO = field(default_factory=DummyIO)
     dbg: DummyDbg = field(default_factory=DummyDbg)
+    open_calls: int = 0
+    close_calls: int = 0
+    reconnect_calls: int = 0
 
     def __post_init__(self) -> None:
         self.target = type("Target", (), {"kind": self.kind})()
         self.rec = SimpleNamespace(name="rec")
         self.infer = SimpleNamespace(name="infer")
-        self.resolve = SimpleNamespace(name="resolve")
+        self.resolve = SimpleNamespace(name="resolve", bind_defaults=lambda **_: None)
         self.crash = SimpleNamespace(name="crash")
+
+    def open(self) -> DummySession:
+        self.open_calls += 1
+        return self
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+    def reconnect(self) -> None:
+        self.reconnect_calls += 1
 
 
 @dataclass
@@ -96,8 +115,11 @@ def fake_pwntools_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return FakeELF(path)
 
     monkeypatch.setattr(script_mod, "ELF", fake_elf)
-    if "binary" in script_mod.context._tls:
-        del script_mod.context._tls["binary"]
+    tls = getattr(script_mod.context, "_tls", None)
+    if isinstance(tls, dict) and "binary" in tls:
+        del tls["binary"]
+    if hasattr(script_mod.context, "binary"):
+        monkeypatch.setattr(script_mod.context, "binary", None)
     monkeypatch.setattr(script_mod.context, "log_level", "info")
     monkeypatch.setattr(script_mod.context, "terminal", [])
     return {"loaded": loaded, "auto_libc": auto_libc}
@@ -123,8 +145,8 @@ def test_script_initializes_target_and_runtime_defaults(
     assert entry.libc is fake_pwntools_env["auto_libc"]
     assert entry.target.libc == "/glibc/libc.so.6"
     assert script_mod.context.binary is entry.elf
-    assert script_mod.context.log_level == 10
-    assert script_mod.context.terminal == ["tmux", "splitw", "-h"]
+    assert script_mod.context.log_level in ("debug", 10)
+    assert script_mod.context.terminal == ["tmux", "splitw", "-h", "-d"]
     assert fake_pwntools_env["loaded"] == [("./challenge", False)]
 
 
@@ -159,8 +181,8 @@ def test_script_start_uses_process_by_default(
 
     result = entry.start()
 
-    assert result is session
-    assert entry.session is session
+    assert result is entry
+    assert entry.as_session is session
     assert entry.io is session.io
     assert len(calls) == 1
     assert calls[0]["target"].kind == "process"
@@ -171,7 +193,7 @@ def test_script_start_uses_process_by_default(
     assert calls[0]["target"].cwd == "/tmp/challenge"
     assert calls[0]["target"].metadata == {
         "log_level": "debug",
-        "terminal": ["tmux", "splitw", "-h"],
+        "terminal": ["tmux", "splitw", "-h", "-d"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout is None
@@ -211,7 +233,7 @@ def test_script_start_uses_remote_when_remote_flag_is_set(
 
     result = entry.start()
 
-    assert result is session
+    assert result is entry
     assert len(calls) == 1
     assert calls[0]["target"].kind == "remote"
     assert calls[0]["target"].host == "example.com"
@@ -220,7 +242,7 @@ def test_script_start_uses_remote_when_remote_flag_is_set(
     assert calls[0]["target"].libc == "./libc.so.6"
     assert calls[0]["target"].metadata == {
         "log_level": "info",
-        "terminal": ["tmux", "splitw", "-h"],
+        "terminal": ["tmux", "splitw", "-h", "-d"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout == 1.5
@@ -252,6 +274,102 @@ def test_script_gdb_attaches_for_local_process(
     assert session.dbg.attach_calls == [
         {"io": None, "script": "b *main\nc", "api": True}
     ]
+
+
+def test_script_debug_starts_process_under_gdb_and_waits_for_keypress(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    wait_calls = 0
+
+    class FakeController:
+        pass
+
+    class FakeDebugTube(DummyIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gdb = FakeController()
+
+    created: list[dict[str, Any]] = []
+    debug_tube = FakeDebugTube()
+
+    def fake_debug(
+        argv: list[str],
+        gdbscript: str | None = None,
+        exe: str | None = None,
+        env: dict[str, str] | None = None,
+        api: bool = False,
+        cwd: str | None = None,
+    ) -> FakeDebugTube:
+        created.append(
+            {
+                "argv": argv,
+                "gdbscript": gdbscript,
+                "exe": exe,
+                "env": env,
+                "api": api,
+                "cwd": cwd,
+            }
+        )
+        return debug_tube
+
+    def fake_wait() -> None:
+        nonlocal wait_calls
+        wait_calls += 1
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", True)
+    monkeypatch.setattr(script_mod.gdb, "debug", fake_debug)
+    monkeypatch.setattr(
+        script_mod.ScriptEntry,
+        "_wait_for_debugger_keypress",
+        staticmethod(fake_wait),
+    )
+
+    entry = CHun.script(
+        "./challenge",
+        argv=["./challenge", "--fast"],
+        env={"MODE": "1"},
+        cwd="/tmp/challenge",
+    )
+    result = entry.debug("b *main\nc")
+
+    assert result is entry
+    assert created == [
+        {
+            "argv": ["./challenge", "--fast"],
+            "gdbscript": "b *main\nc",
+            "exe": "./challenge",
+            "env": {"MODE": "1"},
+            "api": True,
+            "cwd": "/tmp/challenge",
+        }
+    ]
+    assert wait_calls == 1
+    assert entry.dbg._controller is debug_tube.gdb
+    assert entry.sendline(b"PING") is None
+    assert debug_tube.calls[-1] == ("sendline", (b"PING",), {})
+
+
+def test_script_debug_falls_back_to_start_when_gdb_flag_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge")
+
+    assert entry.debug("b *main") is entry
+    assert entry.as_session is session
 
 
 def test_script_gdb_warns_for_remote_session(
@@ -316,7 +434,7 @@ def test_script_session_property_requires_start(
     entry = CHun.script("./challenge")
 
     with pytest.raises(RuntimeError):
-        _ = entry.session
+        _ = entry.as_session
 
     with pytest.raises(RuntimeError):
         _ = entry.rec
@@ -337,6 +455,76 @@ def test_script_uses_explicit_libc_when_provided(
         ("./challenge", False),
         ("./libc.so.6", False),
     ]
+
+
+def test_script_start_binds_default_elf_and_libc_to_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    bind_calls: list[dict[str, Any]] = []
+    session.resolve = SimpleNamespace(
+        name="resolve",
+        bind_defaults=lambda **kwargs: bind_calls.append(kwargs),
+    )
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", libc="./libc.so.6")
+    entry.start()
+
+    assert bind_calls == [{"elf": entry.elf, "libc_elf": entry.libc}]
+
+
+def test_script_start_is_chainable(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.as_session is session
+    assert entry.rec is session.rec
+    assert entry.resolve is session.resolve
+
+
+def test_script_context_manager_opens_and_closes_session(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    with CHun.script("./challenge") as entry:
+        assert entry.as_session is session
+
+    assert session.open_calls == 1
+    assert session.close_calls == 1
 
 
 def test_script_explicit_io_methods_and_aliases_forward_to_io(
