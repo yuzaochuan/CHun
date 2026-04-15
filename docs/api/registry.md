@@ -19,7 +19,7 @@
   - 例如 `libc.base`、`fmt.input_offset`
 - `artifacts`
   - 可复用产物
-  - 例如 payload、脚本、模板渲染结果
+  - 例如 payload、脚本、模板渲染结果、libc catalog 检索结果
 - `context`
   - 会话背景信息
   - 例如 target kind、transport kind、libc path
@@ -101,6 +101,12 @@
 3. 把结果写回 fact，例如 `libc.base`
 
 这证明新的 registry 不是纯存储壳，而是能承接 session + inference 的最小工作流闭环。
+
+`session.infer.libc_candidates_from_leaks()` 在注入 `libc_catalog` 后还会：
+
+1. 调用 SQLite catalog 检索候选
+2. 把完整 `LibcSearchResult` 写入 artifact，默认名为 `libc.candidates`
+3. 若候选唯一，则自动写入 `libc.version` fact
 
 ## 当前推荐入口
 

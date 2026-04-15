@@ -69,6 +69,8 @@
 - 枚举约束（类型安全）
 - 字符串兼容（便于日志、序列化、展示）
 
+其中 `ArtifactKind` 现在包含 `CATALOG_RESULT`，用于保存 `LibcSearchResult` 这类 catalog 检索产物。
+
 ## 数据模型如何支撑 Registry 与 Transport
 
 - `TargetSpec`：描述目标

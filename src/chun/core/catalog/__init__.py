@@ -8,10 +8,12 @@ from .builder import (
     load_schema,
 )
 from .repository import LibcCatalogRepository
+from .service import LibcCatalogService
 
 __all__ = [
     "CatalogBuildSummary",
     "LibcCatalogRepository",
+    "LibcCatalogService",
     "build_libc_database",
     "default_db_path",
     "default_raw_dir",

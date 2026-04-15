@@ -50,3 +50,27 @@ print(result.observation_name, hex(result.aligned_base))
 - `value`：`aligned_base` 的别名，适合直接参与后续地址计算
 
 当前阶段的 inference 目标是打通最小闭环，不是提前实现完整评分系统。
+
+## Libc Catalog 候选检索
+
+当 `InferenceService` 注入 `libc_catalog` 后，可以直接把多条泄漏送入 catalog：
+
+```python
+from chun import CHun, LibcCatalogService
+
+session = CHun.process("./challenge")
+session.infer.libc_catalog = LibcCatalogService()
+
+result = session.infer.libc_candidates_from_leaks(
+    {
+        "puts": 0x7F1234580AA0,
+        "__isoc99_scanf": 0x7F1234521AB0,
+    }
+)
+
+print(result.candidates)
+print(session.registry.get_artifact("libc.candidates"))
+print(session.registry.get_fact("libc.version"))
+```
+
+若候选唯一，`libc.version` 会自动写回 registry；若候选不唯一，只保留 artifact，不强行确认事实。
