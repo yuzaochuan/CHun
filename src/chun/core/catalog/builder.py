@@ -653,15 +653,23 @@ def _select_and_score_symbols(
 ) -> tuple[RawSymbolRecord, ...]:
     selected: dict[str, RawSymbolRecord] = {}
     for raw_name, offset in raw_symbols.items():
-        canonical_name = symbol_policy.alias_to_canonical.get(raw_name)
-        if canonical_name is None:
-            if not include_all:
-                continue
+        if raw_name in symbol_policy.priorities:
             symbol_name = raw_name
-            score = DEFAULT_SYMBOL_SCORE
+            score = _score_for_priority(symbol_policy.priorities[raw_name])
         else:
-            symbol_name = canonical_name
-            score = _score_for_priority(symbol_policy.priorities[canonical_name])
+            canonical_name = symbol_policy.alias_to_canonical.get(raw_name)
+            if canonical_name is None:
+                if not include_all:
+                    continue
+                symbol_name = raw_name
+                score = DEFAULT_SYMBOL_SCORE
+            else:
+                # Prefer the exact canonical symbol when both canonical and alias
+                # exist in the same libc and point to different offsets.
+                if canonical_name in raw_symbols:
+                    continue
+                symbol_name = canonical_name
+                score = _score_for_priority(symbol_policy.priorities[canonical_name])
         existing = selected.get(symbol_name)
         if existing is None:
             selected[symbol_name] = RawSymbolRecord(
