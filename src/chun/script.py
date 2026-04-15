@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+import termios
+import tty
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Sequence
 
-from ._compat import ELF, args, context, log
+from ._compat import ELF, args, context, gdb, log, pause
 from .bridges.gdb import PwntoolsGdbBridge
 from .core.analysis import CorefileAnalyzer
 from .core.errors import TransportConfigError
@@ -13,11 +16,12 @@ from .core.inference import InferenceService
 from .core.models import TargetSpec
 from .core.registry import EvidenceRegistry
 from .core.resolve import ResolveService
+from .transports.pwntools_tube import PwntoolsTubeTransport
 
 if TYPE_CHECKING:
     from .core.session import CHunSession
 
-DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h")
+DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h", "-d")
 
 
 class ScriptEntry:
@@ -37,7 +41,7 @@ class ScriptEntry:
         cwd: str | None = None,
         timeout: float | None = None,
         log_level: str = "debug",
-        terminal: Sequence[str] = ("tmux", "splitw", "-h"),
+        terminal: Sequence[str] = DEFAULT_SCRIPT_TERMINAL,
     ) -> None:
         self._factory = factory
         resolved_terminal = tuple(terminal) if terminal else DEFAULT_SCRIPT_TERMINAL
@@ -69,8 +73,23 @@ class ScriptEntry:
             raise TransportConfigError("CHun.script(...) 需要提供 binary。")
 
         self._elf = ELF(self.target.binary, checksec=False)
-        context._tls["binary"] = self._elf
+        self._set_context_binary(self._elf)
         self._libc = self._load_libc()
+
+    @staticmethod
+    def _set_context_binary(binary: Any) -> None:
+        try:
+            context.binary = binary
+            return
+        except Exception:
+            pass
+
+        tls = getattr(context, "_tls", None)
+        if isinstance(tls, dict):
+            tls["binary"] = binary
+            return
+
+        setattr(context, "binary", binary)
 
     def _load_libc(self) -> Any:
         libc_path = self.target.libc
@@ -114,25 +133,80 @@ class ScriptEntry:
         transport = self._factory._build_pwntools_tube_transport(timeout=self.timeout)
         return self._factory.from_specs(target, transport)
 
-    def start(self) -> "CHunSession":
-        """启动并缓存当前脚本对应的 `CHunSession`。"""
+    def start(self) -> "ScriptEntry":
+        """启动并缓存当前脚本对应的 `CHunSession`，并返回脚本入口自身。"""
         if self._session is None:
             self._session = self._build_session()
-        return self._session
+            self._session.resolve.bind_defaults(elf=self.elf, libc_elf=self.libc)
+        return self
 
     def gdb(self, script: str = "") -> object | None:
         """在 `GDB` 模式下对本地 process session 执行 attach。"""
         if not args.GDB:
             return None
 
-        session = self.start()
+        self.start()
+        session = self.as_session
         if session.target.kind != "process":
             log.warning("当前为 REMOTE 模式，跳过 GDB attach。")
             return None
         return session.dbg.attach(script=script)
 
+    def debug(self, script: str = "") -> "ScriptEntry":
+        """在 `GDB` 下启动本地 process，并将 tube 接入当前脚本入口。"""
+        if not args.GDB:
+            return self.start()
+
+        self.start()
+        session = self.as_session
+        if session.target.kind != "process":
+            raise TransportConfigError("ScriptEntry.debug() 仅支持本地 process 目标。")
+        if not isinstance(session.transport, PwntoolsTubeTransport):
+            raise TransportConfigError(
+                "ScriptEntry.debug() 仅支持 pwntools-tube transport。"
+            )
+        if session.transport.is_open:
+            session.close()
+
+        argv = list(session.target.argv)
+        if not argv:
+            if session.target.binary is None:
+                raise TransportConfigError("process 模式至少需要 binary 或 argv。")
+            argv = [session.target.binary]
+
+        debug_tube = gdb.debug(
+            argv,
+            gdbscript=script or None,
+            exe=session.target.binary,
+            env=session.target.env or None,
+            api=True,
+            cwd=session.target.cwd,
+        )
+        session.transport.adopt_tube(debug_tube)
+        session.dbg.bind_runtime(controller=getattr(debug_tube, "gdb", None))
+        if hasattr(session, "_sync_transport_context"):
+            session._sync_transport_context()
+        self._wait_for_debugger_keypress()
+        return self
+
+    @staticmethod
+    def _wait_for_debugger_keypress() -> None:
+        stream = sys.stdin
+        if not hasattr(stream, "isatty") or not stream.isatty():
+            pause()
+            return
+
+        log.info("GDB 已就绪，按任意键继续 exp ...")
+        fd = stream.fileno()
+        old_attrs = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            stream.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+
     @property
-    def session(self) -> "CHunSession":
+    def as_session(self) -> "CHunSession":
         """返回当前已启动的 session，用于访问完整框架能力。"""
         if self._session is None:
             raise RuntimeError("ScriptEntry 尚未启动，请先调用 start()。")
@@ -141,7 +215,7 @@ class ScriptEntry:
     @property
     def io(self) -> Any:
         """返回当前 session 的 `io` 入口，适合直接做 tube 交互。"""
-        return self.session.io
+        return self.as_session.io
 
     @property
     def target(self) -> TargetSpec:
@@ -161,27 +235,27 @@ class ScriptEntry:
     @property
     def rec(self) -> EvidenceRegistry:
         """访问 session 的事实记录入口，常用于记录 leak 和 context。"""
-        return self.session.rec
+        return self.as_session.rec
 
     @property
     def infer(self) -> InferenceService:
         """访问 session 的最小 inference 服务。"""
-        return self.session.infer
+        return self.as_session.infer
 
     @property
     def resolve(self) -> ResolveService:
         """访问 session 的解析服务，用于符号、DynELF 等推导。"""
-        return self.session.resolve
+        return self.as_session.resolve
 
     @property
     def dbg(self) -> PwntoolsGdbBridge:
         """访问 session 的交互式 GDB bridge。"""
-        return self.session.dbg
+        return self.as_session.dbg
 
     @property
     def crash(self) -> CorefileAnalyzer:
         """访问 session 的 core dump / crash 分析入口。"""
-        return self.session.crash
+        return self.as_session.crash
 
     def send(self, data: bytes) -> None:
         """转发到当前 `io.send()`。"""
@@ -238,6 +312,14 @@ class ScriptEntry:
     def ia(self) -> None:
         """`interactive()` 的快捷别名。"""
         self.interactive()
+
+    def __enter__(self) -> "ScriptEntry":
+        self.start()
+        self.as_session.open()
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        self.as_session.close()
 
     def __getattr__(self, name: str) -> Any:
         """将未显式声明的低频方法兜底转发到当前 `io`。"""

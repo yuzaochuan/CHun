@@ -92,9 +92,30 @@ class PwntoolsGdbBridge:
         )
         return result
 
+    def bind_runtime(
+        self, *, controller: object | None = None, pid: object | None = None
+    ) -> None:
+        """将通过其它方式启动的 GDB runtime 绑定到当前 bridge。"""
+        self._controller = controller
+        self._gdb_pid = pid
+        self.registry.set_context(
+            "debugger.attached",
+            controller is not None or pid is not None,
+            kind=ContextKind.SESSION,
+            domain=RecordDomain.DEBUGGER,
+        )
+        self.registry.set_context(
+            "debugger.attach.pid",
+            self._gdb_pid,
+            kind=ContextKind.SESSION,
+            domain=RecordDomain.DEBUGGER,
+        )
+
     def _controller_execute(self, command: str) -> str:
         if self._controller is None or not hasattr(self._controller, "execute"):
-            raise DebuggerBridgeError("当前 PwntoolsGdbBridge 没有可用的 GDB API 控制器。")
+            raise DebuggerBridgeError(
+                "当前 PwntoolsGdbBridge 没有可用的 GDB API 控制器。"
+            )
         result = self._controller.execute(command)
         return "" if result is None else str(result)
 
@@ -122,7 +143,9 @@ class PwntoolsGdbBridge:
         output = self.execute("info registers")
         registers: dict[str, int] = {}
         for line in output.splitlines():
-            match = re.match(r"^([a-zA-Z][a-zA-Z0-9]+)\s+0x([0-9a-fA-F]+)", line.strip())
+            match = re.match(
+                r"^([a-zA-Z][a-zA-Z0-9]+)\s+0x([0-9a-fA-F]+)", line.strip()
+            )
             if not match:
                 continue
             registers[match.group(1)] = int(match.group(2), 16)
@@ -143,7 +166,11 @@ class PwntoolsGdbBridge:
         mappings: list[dict[str, object]] = []
         for line in output.splitlines():
             parts = line.split()
-            if len(parts) < 5 or not parts[0].startswith("0x") or not parts[1].startswith("0x"):
+            if (
+                len(parts) < 5
+                or not parts[0].startswith("0x")
+                or not parts[1].startswith("0x")
+            ):
                 continue
             entry = {
                 "start": int(parts[0], 16),

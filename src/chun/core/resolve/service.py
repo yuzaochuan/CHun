@@ -33,6 +33,18 @@ class ResolveService:
         self.infer = infer
         self.memleak_adapter_cls = memleak_adapter_cls
         self.dynelf_resolver = dynelf_resolver_cls(registry, adapter_cls=memleak_adapter_cls)
+        self.default_elf: object | None = None
+        self.default_libc_elf: object | None = None
+
+    def bind_defaults(
+        self,
+        *,
+        elf: object | None = None,
+        libc_elf: object | None = None,
+    ) -> None:
+        """绑定当前会话默认使用的 ELF / libc ELF 对象。"""
+        self.default_elf = elf
+        self.default_libc_elf = libc_elf
 
     def memleak(
         self,
@@ -86,7 +98,15 @@ class ResolveService:
         symbol: str,
         fact_name: str = "libc.base",
     ) -> BaseInferenceResult:
-        candidate = libc_elf if libc_elf is not None else elf
+        candidate = (
+            libc_elf
+            if libc_elf is not None
+            else self.default_libc_elf
+            if self.default_libc_elf is not None
+            else elf
+            if elf is not None
+            else self.default_elf
+        )
         if candidate is None:
             raise ResolverError("libc_elf 或 elf 至少需要提供一个。")
         if not hasattr(candidate, "sym"):
@@ -102,13 +122,16 @@ class ResolveService:
         self,
         observation_name: str,
         *,
-        elf: SupportsSym,
+        elf: SupportsSym | None = None,
         symbol: str,
         fact_name: str = "elf.base",
     ) -> BaseInferenceResult:
-        if not hasattr(elf, "sym"):
+        candidate = elf if elf is not None else self.default_elf
+        if candidate is None:
+            raise ResolverError("elf 至少需要提供一个。")
+        if not hasattr(candidate, "sym"):
             raise ResolverError("elf 需要提供 .sym 映射。")
-        symbol_offset = int(elf.sym[symbol])
+        symbol_offset = int(candidate.sym[symbol])
         return self.infer.pie_base_from_symbol_leak(
             observation_name,
             symbol_offset=symbol_offset,
