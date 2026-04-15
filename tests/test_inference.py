@@ -6,6 +6,7 @@ from pathlib import Path
 from chun.core.catalog import LibcCatalogService, build_libc_database
 from chun.core.errors import InferenceInputError, ResolverError
 from chun.core.inference import InferenceService
+import chun.core.inference.service as inference_service_mod
 from chun.core.resolve import ResolveService
 from chun.core.models import ArtifactKind, ObservationKind, FactKind, RecordDomain
 from chun.core.registry import EvidenceRegistry
@@ -355,6 +356,46 @@ def test_libc_candidates_from_leaks_prints_candidates_when_multiple_and_unconfir
     assert "libc candidates:" in captured.out
     assert "id=1 name=glibc-a" in captured.out
     assert "id=2 name=glibc-b" in captured.out
+
+    service.close()
+
+
+def test_libc_candidates_from_leaks_logs_error_when_no_candidate_matches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    output_path = tmp_path / "libc.db"
+    payload = [
+        {
+            "name": "glibc-a",
+            "arch": "amd64",
+            "build_id": "build-a",
+            "symbols": {"puts": "0x080aa0"},
+        }
+    ]
+    (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
+    build_libc_database(raw_dir=raw_dir, output_path=output_path)
+
+    errors: list[str] = []
+
+    class DummyLog:
+        @staticmethod
+        def error(message: str) -> None:
+            errors.append(message)
+
+    monkeypatch.setattr(inference_service_mod, "log", DummyLog())
+
+    service = LibcCatalogService(db_path=output_path)
+    registry = EvidenceRegistry()
+    infer = InferenceService(registry, libc_catalog=service)
+    result = infer.libc_candidates_from_leaks(
+        {"puts": 0x7F0000000000 + 0x180AA1},
+    )
+
+    assert result.candidates == []
+    assert errors == ["未找到符合当前条件的 libc 候选。"]
 
     service.close()
 

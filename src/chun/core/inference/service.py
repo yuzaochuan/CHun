@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from ..._compat import log
 from ..catalog import LibcCatalogService
 from ..errors import InferenceInputError
 from ..models import ArtifactKind, BaseInferenceResult, FactKind, ObservationKind, RecordDomain
@@ -155,6 +156,8 @@ class InferenceService:
                 overwrite=True,
             )
             self._auto_record_libc_base(target_candidate.libc_id, leaks)
+        elif len(result.candidates) == 0:
+            log.error("未找到符合当前条件的 libc 候选。")
         elif len(result.candidates) > 1:
             self._print_candidates(result.candidates)
         return result
