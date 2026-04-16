@@ -353,9 +353,14 @@ def _load_flat_db_symbols(symbols_path: Path) -> dict[str, int]:
         if len(parts) != 2:
             raise ValueError(f"{symbols_path}:{line_number} 不是合法的 symbol 记录。")
         symbol_name, offset = parts
-        if symbol_name in symbols:
-            raise ValueError(f"{symbols_path}:{line_number} 出现重复 symbol: {symbol_name}")
-        symbols[symbol_name] = int(offset, 16)
+        parsed_offset = int(offset, 16)
+        existing_offset = symbols.get(symbol_name)
+        if existing_offset is not None:
+            # 社区 libc 数据集中同名导出可能出现多次；保留首个偏移以保证构建连续性。
+            if existing_offset == parsed_offset:
+                continue
+            continue
+        symbols[symbol_name] = parsed_offset
     return symbols
 
 

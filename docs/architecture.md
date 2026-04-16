@@ -69,6 +69,7 @@
 - `priority: 1/2/3` 会分别映射到 `10.0/3.0/1.0`
 - `repository.find_candidates(require_all=False)` 会按 `SUM(score)` 而不是单纯按命中个数排序
 - 服务层查询前会做动态名称归一化：先剥离 `@got` / `_plt` / `_got.plt` 等后缀，再按词典把 alias 映射到规范名
+- builder 对社区原始数据里的重复导出符号做容错处理：优先保留首个偏移，避免导入 richer libc 数据集时中断构建
 
 ## 第二阶段目标
 
