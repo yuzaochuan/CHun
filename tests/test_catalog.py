@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from chun.core.catalog import LibcCatalogRepository, LibcCatalogService, build_libc_database, load_schema
+import chun.core.catalog.builder as catalog_builder_mod
 from chun.core.errors import RegistryNotFoundError
 from chun.core.models import LibcLeakConstraint
 
@@ -244,3 +245,64 @@ def test_catalog_service_normalizes_aliases_and_suffixes(tmp_path: Path) -> None
             raise AssertionError("expected RegistryNotFoundError")
     finally:
         service.close()
+
+
+def test_build_prefers_shared_object_arch_over_libc_id_suffix(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw_dir = tmp_path / "raw"
+    db_dir = raw_dir / "db"
+    db_dir.mkdir(parents=True)
+    output_path = tmp_path / "libc.db"
+
+    (db_dir / "libc6-i386_2.19-0ubuntu6_amd64.info").write_text(
+        "unit-test",
+        encoding="utf-8",
+    )
+    (db_dir / "libc6-i386_2.19-0ubuntu6_amd64.symbols").write_text(
+        "puts 00080aa0\n",
+        encoding="utf-8",
+    )
+    (db_dir / "libc6-i386_2.19-0ubuntu6_amd64.so").write_bytes(b"fake-so")
+
+    (db_dir / "libc6-amd64_2.19-0ubuntu6_i386.info").write_text(
+        "unit-test",
+        encoding="utf-8",
+    )
+    (db_dir / "libc6-amd64_2.19-0ubuntu6_i386.symbols").write_text(
+        "puts 00080aa0\n",
+        encoding="utf-8",
+    )
+    (db_dir / "libc6-amd64_2.19-0ubuntu6_i386.so").write_bytes(b"fake-so")
+
+    def fake_infer_arch(so_path: Path) -> str | None:
+        if so_path.name == "libc6-i386_2.19-0ubuntu6_amd64.so":
+            return "i386"
+        if so_path.name == "libc6-amd64_2.19-0ubuntu6_i386.so":
+            return "amd64"
+        return None
+
+    monkeypatch.setattr(
+        catalog_builder_mod,
+        "_infer_arch_from_shared_object",
+        fake_infer_arch,
+    )
+
+    build_libc_database(raw_dir=raw_dir, output_path=output_path)
+
+    connection = sqlite3.connect(output_path)
+    try:
+        rows = connection.execute(
+            """
+            SELECT name, arch
+            FROM libc_versions
+            ORDER BY name
+            """
+        ).fetchall()
+        assert rows == [
+            ("libc6-amd64_2.19-0ubuntu6_i386", "amd64"),
+            ("libc6-i386_2.19-0ubuntu6_amd64", "i386"),
+        ]
+    finally:
+        connection.close()

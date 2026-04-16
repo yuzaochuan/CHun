@@ -7,6 +7,7 @@ import csv
 import hashlib
 import json
 import sqlite3
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib import resources
@@ -328,7 +329,7 @@ def _load_flat_db_records(
         records.append(
             RawLibcRecord(
                 name=libc_id,
-                arch=_infer_arch_from_libc_id(libc_id),
+                arch=_infer_arch_from_libc(libc_id, so_path),
                 build_id=None,
                 sha256=sha256,
                 source=source or "libc-database",
@@ -369,6 +370,38 @@ def _infer_arch_from_libc_id(libc_id: str) -> str:
         if libc_id.endswith(f"_{arch}"):
             return arch
     return "unknown"
+
+
+def _infer_arch_from_file_output(output: str) -> str | None:
+    text = output.lower()
+    if "elf 32-bit" in text and "intel 80386" in text:
+        return "i386"
+    if "elf 64-bit" in text and "x86-64" in text:
+        return "amd64"
+    if "aarch64" in text or "arm64" in text:
+        return "arm64"
+    return None
+
+
+def _infer_arch_from_shared_object(so_path: Path) -> str | None:
+    if not so_path.is_file():
+        return None
+    try:
+        output = subprocess.check_output(
+            ["file", str(so_path)],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, OSError, subprocess.CalledProcessError):
+        return None
+    return _infer_arch_from_file_output(output)
+
+
+def _infer_arch_from_libc(libc_id: str, so_path: Path) -> str:
+    so_arch = _infer_arch_from_shared_object(so_path)
+    if so_arch is not None:
+        return so_arch
+    return _infer_arch_from_libc_id(libc_id)
 
 
 def _sha256_file(path: Path) -> str:

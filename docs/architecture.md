@@ -70,6 +70,7 @@
 - `repository.find_candidates(require_all=False)` 会按 `SUM(score)` 而不是单纯按命中个数排序
 - 服务层查询前会做动态名称归一化：先剥离 `@got` / `_plt` / `_got.plt` 等后缀，再按词典把 alias 映射到规范名
 - builder 对社区原始数据里的重复导出符号做容错处理：优先保留首个偏移，避免导入 richer libc 数据集时中断构建
+- flat `raw/db` 构建时，架构会优先从对应 `.so` 的实际 ELF 信息推断；只有缺少 `.so` 或探测失败时，才回退到文件名后缀 heuristic
 
 ## 第二阶段目标
 

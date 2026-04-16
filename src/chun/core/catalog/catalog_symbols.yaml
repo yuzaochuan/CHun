@@ -1,4 +1,4 @@
-# CHun Libc Catalog - Target Symbols Collection (91 Items)
+# CHun Libc Catalog - Target Symbols Collection (86 Items)
 
 # ==========================================
 # Priority 1: 核心首轮筛选集 (29项)
@@ -319,7 +319,7 @@
   stability: stable
 
 # ==========================================
-# Priority 3: 版本敏感 / 遗留 / 内部锚点 (13项)
+# Priority 3: 版本敏感 / 遗留 / 内部锚点 (8项)
 # ==========================================
 - name: gets
   kind: function
@@ -349,18 +349,6 @@
   kind: object
   priority: 3
   stability: legacy
-- name: main_arena
-  kind: internal
-  priority: 3
-  stability: version_sensitive
-- name: global_max_fast
-  kind: internal
-  priority: 3
-  stability: version_sensitive
-- name: mp_
-  kind: internal
-  priority: 3
-  stability: version_sensitive
 - name: _IO_list_all
   kind: object
   priority: 3
@@ -369,15 +357,7 @@
   kind: internal
   priority: 3
   stability: version_sensitive
-- name: _IO_str_jumps
-  kind: internal
-  priority: 3
-  stability: version_sensitive
 - name: _IO_wfile_jumps
   kind: internal
   priority: 3
   stability: version_sensitive
-- name: "/bin//sh"
-  kind: string_anchor
-  priority: 3
-  stability: stable

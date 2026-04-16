@@ -24,6 +24,7 @@ Current built SQLite snapshot:
 - symbol count: `50123`
 - source hash: `807a87fad0ef6e823ad4154ac731eea06efe9ec2aa367c1d77e46669a7d4948d`
 - file size at freeze time: about `2.6M`
+- SQLite integrity check: `ok`
 
 Practical version counts at freeze time:
 
@@ -36,6 +37,19 @@ Practical version counts at freeze time:
 
 This snapshot is Ubuntu-heavy by design. That was an intentional tradeoff for
 CTF/PWN usefulness.
+
+Core symbol coverage snapshot:
+
+- canonical symbols defined in `catalog_symbols.yaml`: `86`
+- distinct symbol names currently present in `symbols`: `86`
+
+Interpretation:
+
+- this does not mean the database is broken
+- common CTF symbols like `puts`, `read`, `write`, `system`, `/bin/sh` are
+  present and broadly covered
+- the current core dictionary was trimmed to symbols that are actually useful
+  and stably present in the local dataset
 
 ## Main Data Sources
 
@@ -168,6 +182,43 @@ The builder currently supports two modes:
 - default: `core-only`
 - `--all`: keep all symbols
 
+Flat `raw/db` records are built from:
+
+- `db/<id>.info`
+- `db/<id>.symbols`
+- optional `db/<id>.so`
+- optional `db/<id>.url`
+
+Important builder rule:
+
+- if `<id>.so` exists, architecture is inferred from the real ELF file first
+- only if `.so` is missing or probing fails does the builder fall back to libc
+  ID suffix heuristics
+
+Important runtime dependency:
+
+- flat `raw/db` arch probing currently shells out to the system `file` command
+- if `file` is missing, unusable, or returns an unrecognized string, the build
+  falls back to suffix heuristics
+- this fallback keeps the build running, but it also reopens the possibility of
+  wrong `arch` metadata for mixed-name packages
+
+Important source-hash boundary:
+
+- `dataset_meta.source_hash` is computed from raw source files only
+- builder code changes do not change `source_hash` unless raw inputs changed
+- this means a rebuilt `libc.db` can have the same `source_hash` while still
+  fixing metadata bugs such as wrong `arch`
+
+This rule was added after a real bug was found in mixed-name packages such as:
+
+- `libc6-i386_..._amd64`
+- `libc6-amd64_..._i386`
+
+Those names look cross-architecture, and suffix-only parsing was wrong for
+them. The current builder fixes that by trusting the actual shared object over
+the file name.
+
 ### Core-only mode
 
 Default behavior:
@@ -211,6 +262,50 @@ Rationale:
 This behavior lives in:
 
 - `src/chun/core/catalog/builder.py`
+
+## Architecture Detection Notes
+
+This deserves separate emphasis because it directly affects `search_libc()`
+filtering behavior.
+
+Old behavior:
+
+- infer `arch` from libc ID suffix only
+
+Why that was wrong:
+
+- package names like `libc6-i386_..._amd64` are real and the suffix alone does
+  not describe the actual ELF architecture
+- this caused wrong `arch` values in `libc.db`
+- as a result, `search_libc(single_arch=True)` could silently filter out valid
+  candidates
+
+Current behavior:
+
+- infer from `.so` ELF type first
+- then fall back to file-name suffix only as a last resort
+
+Verification result after this fix:
+
+- previous full-database ELF-vs-metadata mismatches: `268`
+- mismatches after rebuild: `0`
+- libc count before/after rebuild: unchanged at `668`
+- symbol count before/after rebuild: unchanged at `50123`
+- corrected field was metadata only: `libc_versions.arch`
+
+Concrete package examples that were previously wrong:
+
+- `libc6-i386_2.19-0ubuntu6_amd64` -> actual arch `i386`
+- `libc6-amd64_2.19-0ubuntu6_i386` -> actual arch `amd64`
+- `libc6_2.19-0ubuntu6_amd64` -> actual arch `amd64`
+
+Practical takeaway for future refreshes:
+
+- if `single_arch=True` starts behaving suspiciously again, audit builder-side
+  `arch` derivation before touching inference logic
+- when validating a fresh rebuild, compare `libc_versions.arch` against the
+  actual `.so` ELF type for a sample of mixed-name packages before debugging
+  runtime matching
 
 ## How `libc_id` Works
 
