@@ -93,14 +93,25 @@ print(session.registry.get_fact("libc.version"))
 print(session.registry.get_fact("libc.base"))
 ```
 
-`search_libc()` 只会读取 `RecordDomain.LIBC + ObservationKind.SYMBOL_LEAK` 的整数 observation；同名 symbol 若出现多次，会优先采用置信度更高的记录。若版本被唯一确认，或显式传入 `index`，它会继续自动推导并写回 `libc.base`。
+`search_libc()` 只会读取 `RecordDomain.LIBC + ObservationKind.SYMBOL_LEAK` 的整数 observation；同名 symbol 若出现多次，会优先采用置信度更高的记录。默认 `single_arch=True`，若没有显式传 `arch`，系统会尽量从当前上下文推断单架构来收窄候选。若版本被唯一确认，或显式传入 `index`，它会继续自动推导并写回 `libc.base`。
 
-如果存在多个候选，可以把目标 `libc_id` 直接融入检索调用：
+如果你想临时放开全架构搜索，也可以显式关闭这个收窄逻辑：
+
+```python
+result = session.infer.search_libc(
+    require_all=False,
+    single_arch=False,
+)
+```
+
+在这种模式下，如果当前上下文仍然能识别主架构，终端候选输出会分成 `Current arch (...)` 和 `Other arch` 两段，但 `index` 仍然保持全局统一编号，不会因为分组而重排或重编号。
+
+如果存在多个候选，可以先查看结构化结果，再按排名确认目标版本：
 
 ```python
 result = session.infer.search_libc(require_all=False)
-for candidate in result.candidates:
-    print(candidate.libc_id, candidate.name)
+for idx, candidate in enumerate(result.candidates):
+    print(idx, candidate.name, candidate.matched_symbols)
 
 result = session.infer.search_libc(
     require_all=False,

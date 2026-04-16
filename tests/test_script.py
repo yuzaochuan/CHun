@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -39,6 +40,9 @@ class DummyIO:
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = field(
         default_factory=list
     )
+    recv_values: list[bytes] = field(default_factory=list)
+    recvline_values: list[bytes] = field(default_factory=list)
+    recvregex_match: object | None = None
 
     def send(self, data: bytes) -> None:
         self.calls.append(("send", (data,), {}))
@@ -54,6 +58,8 @@ class DummyIO:
 
     def recv(self, n: int = 4096) -> bytes:
         self.calls.append(("recv", (n,), {}))
+        if self.recv_values:
+            return self.recv_values.pop(0)
         return b"recv"
 
     def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
@@ -62,7 +68,16 @@ class DummyIO:
 
     def recvline(self, keepends: bool = True) -> bytes:
         self.calls.append(("recvline", (), {"keepends": keepends}))
+        if self.recvline_values:
+            return self.recvline_values.pop(0)
         return b"line\n" if keepends else b"line"
+
+    def recvregex(self, regex: bytes | str, capture: bool = False) -> object:
+        self.calls.append(("recvregex", (regex,), {"capture": capture}))
+        if self.recvregex_match is not None:
+            return self.recvregex_match
+        pattern = re.compile(regex) if isinstance(regex, str) else re.compile(regex)
+        return pattern.search(b"0xdeadbeef")
 
     def interactive(self) -> None:
         self.calls.append(("interactive", (), {}))
@@ -103,6 +118,8 @@ class DummySession:
 class FakeELF:
     path: str
     libc: Any = None
+    bits: int = 64
+    bytes: int = 8
 
 
 @pytest.fixture
@@ -642,6 +659,171 @@ def test_script_explicit_io_methods_and_aliases_forward_to_io(
         ("recvline", (), {"keepends": True}),
         ("interactive", (), {}),
     ]
+
+
+def test_script_recv_leak_reads_raw_bytes_and_records_symbol_leak(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recv_values = [b"\xa0\x0a\x58\x34\x12\x7f"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    messages: list[str] = []
+    monkeypatch.setattr(script_mod.log, "success", messages.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("puts", delim=b"puts: ")
+
+    assert value == 0x7F1234580AA0
+    observation = session.rec.get_observation("puts")
+    assert observation is not None
+    assert observation.value == value
+    assert observation.domain == RecordDomain.LIBC
+    assert observation.source == "leak"
+    assert messages == [f"Leak [puts] captured: {hex(value)}"]
+    assert session.io.calls == [
+        ("recvuntil", (b"puts: ",), {"drop": False}),
+        ("recv", (6,), {}),
+    ]
+
+
+def test_script_recv_leak_reads_hex_and_applies_offset(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvline_values = [b"0x7f1234580aa0\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak(
+        "puts",
+        delim="puts: ",
+        mode="hex",
+        offset=0x0AA0,
+        source="printf",
+    )
+
+    assert value == 0x7F1234580000
+    observation = session.rec.get_observation("puts")
+    assert observation is not None
+    assert observation.value == value
+    assert observation.source == "printf"
+    assert session.io.calls == [
+        ("recvuntil", ("puts: ",), {"drop": False}),
+        ("recvline", (), {"keepends": False}),
+    ]
+
+
+def test_script_recv_leak_reads_regex_capture_and_allows_custom_domain(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvregex_match = re.search(rb"leak=(0x[0-9a-f]+)", b"leak=0x401000")
+    assert session.io.recvregex_match is not None
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    messages: list[str] = []
+    monkeypatch.setattr(script_mod.log, "success", messages.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak(
+        "main",
+        regex=rb"leak=(0x[0-9a-f]+)",
+        mode="hex",
+        domain=RecordDomain.ELF,
+    )
+
+    assert value == 0x401000
+    observation = session.rec.get_observation("main")
+    assert observation is not None
+    assert observation.value == value
+    assert observation.domain == RecordDomain.ELF
+    assert messages == [f"Leak [main] captured: {hex(value)}"]
+    assert session.io.calls == [
+        ("recvregex", (rb"leak=(0x[0-9a-f]+)",), {"capture": True}),
+    ]
+
+
+def test_script_recv_leak_supports_direct_stream_read_without_delim_or_regex(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recv_values = [b"\x78\x56\x34\x12"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    entry.elf.bits = 32
+    entry.elf.bytes = 4
+    value = entry.recv_leak("puts")
+
+    assert value == 0x12345678
+    observation = session.rec.get_observation("puts")
+    assert observation is not None
+    assert observation.value == value
+    assert session.io.calls == [
+        ("recv", (4,), {}),
+    ]
+
+
+def test_script_recv_leak_validates_delim_and_regex_exclusivity(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(ValueError):
+        entry.recv_leak("puts", delim=b":", regex=rb"(.*)")
 
 
 def test_script_getattr_falls_back_to_io_only(

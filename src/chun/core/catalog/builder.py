@@ -14,7 +14,6 @@ from importlib import resources
 from pathlib import Path
 from typing import Iterable
 
-
 SCRIPT_VERSION = "1"
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_RAW_DIR = ROOT_DIR / "data" / "libc" / "raw"
@@ -81,13 +80,19 @@ def default_db_path() -> Path:
 
 def load_schema() -> str:
     """读取 catalog schema SQL。"""
-    return resources.files("chun.core.catalog").joinpath("schema.sql").read_text(encoding="utf-8")
+    return (
+        resources.files("chun.core.catalog")
+        .joinpath("schema.sql")
+        .read_text(encoding="utf-8")
+    )
 
 
 def load_symbol_policy() -> CatalogSymbolPolicy:
     """读取核心符号词典。"""
-    text = resources.files("chun.core.catalog").joinpath("catalog_symbols.yaml").read_text(
-        encoding="utf-8"
+    text = (
+        resources.files("chun.core.catalog")
+        .joinpath("catalog_symbols.yaml")
+        .read_text(encoding="utf-8")
     )
     items = _parse_catalog_symbols_yaml(text)
     alias_to_canonical: dict[str, str] = {}
@@ -113,7 +118,9 @@ def build_libc_database(
 ) -> CatalogBuildSummary:
     """从原始数据目录构建 sqlite libc catalog。"""
     resolved_raw_dir = Path(raw_dir) if raw_dir is not None else default_raw_dir()
-    resolved_output_path = Path(output_path) if output_path is not None else default_db_path()
+    resolved_output_path = (
+        Path(output_path) if output_path is not None else default_db_path()
+    )
 
     resolved_raw_dir.mkdir(parents=True, exist_ok=True)
     resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,7 +154,9 @@ def build_libc_database(
             )
         )
         for symbol in record.symbols:
-            symbol_rows.append((libc_id, symbol.symbol_name, symbol.offset, symbol.score))
+            symbol_rows.append(
+                (libc_id, symbol.symbol_name, symbol.offset, symbol.score)
+            )
 
     built_at = datetime.now(timezone.utc).isoformat()
     dataset_meta = {
@@ -209,6 +218,7 @@ def build_libc_database(
         symbol_count=len(symbol_rows),
         dataset_meta=dataset_meta,
     )
+
 
 def load_raw_records(
     raw_dir: Path,
@@ -289,7 +299,8 @@ def list_source_files(raw_dir: Path) -> list[Path]:
         if path.is_file()
         and not path.name.startswith(".")
         and ".git" not in path.parts
-        and path.suffix.lower() in {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".txt"}
+        and path.suffix.lower()
+        in {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".txt"}
     ]
 
 
@@ -346,7 +357,9 @@ def _load_flat_db_records(
 
 def _load_flat_db_symbols(symbols_path: Path) -> dict[str, int]:
     symbols: dict[str, int] = {}
-    for line_number, line in enumerate(symbols_path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(
+        symbols_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         stripped = line.strip()
         if not stripped:
             continue
@@ -434,7 +447,9 @@ def _load_jsonl_records(
     include_all: bool,
 ) -> list[RawLibcRecord]:
     records: list[RawLibcRecord] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         stripped = line.strip()
         if not stripped:
             continue
@@ -467,10 +482,14 @@ def _load_tabular_records(
             if not row:
                 continue
             name = _require_text(row.get("name"), path, "name", row_number)
-            arch = _normalize_arch(_require_text(row.get("arch"), path, "arch", row_number))
+            arch = _normalize_arch(
+                _require_text(row.get("arch"), path, "arch", row_number)
+            )
             build_id = _optional_text(row.get("build_id") or row.get("buildid"))
             sha256 = _optional_text(row.get("sha256"))
-            source = _optional_text(row.get("source")) or path.suffix.lstrip(".") or "raw"
+            source = (
+                _optional_text(row.get("source")) or path.suffix.lstrip(".") or "raw"
+            )
             source_ref = _optional_text(row.get("source_ref")) or path.name
             symbol_name = _require_text(
                 row.get("symbol_name") or row.get("symbol"),
@@ -594,7 +613,9 @@ def _normalize_symbols(symbols_payload: object, path: Path) -> dict[str, int]:
             normalized_name = _require_text(symbol_name, path, "symbol_name")
             if normalized_name in symbols:
                 raise ValueError(f"{path} 中存在重复 symbol: {normalized_name}")
-            symbols[normalized_name] = _parse_offset(offset, path=path, field_name=normalized_name)
+            symbols[normalized_name] = _parse_offset(
+                offset, path=path, field_name=normalized_name
+            )
         return symbols
 
     if isinstance(symbols_payload, list):
@@ -717,7 +738,9 @@ def _select_and_score_symbols(
             )
             continue
         if existing.offset != offset:
-            raise ValueError(f"符号 {symbol_name} 在同一 libc 记录中出现多个不同 offset。")
+            raise ValueError(
+                f"符号 {symbol_name} 在同一 libc 记录中出现多个不同 offset。"
+            )
         if score > existing.score:
             selected[symbol_name] = RawSymbolRecord(
                 symbol_name=symbol_name,

@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import chun.core.inference.service as inference_service_mod
 from chun.core.catalog import LibcCatalogService, build_libc_database
 from chun.core.errors import InferenceInputError, ResolverError
 from chun.core.inference import InferenceService
-import chun.core.inference.service as inference_service_mod
-from chun.core.resolve import ResolveService
-from chun.core.models import ArtifactKind, ObservationKind, FactKind, RecordDomain
+from chun.core.models import ArtifactKind, FactKind, ObservationKind, RecordDomain
 from chun.core.registry import EvidenceRegistry
+from chun.core.resolve import ResolveService
 
 
 def test_libc_base_inference_creates_fact_from_symbol_leak_observation() -> None:
@@ -51,6 +51,7 @@ def test_libc_candidates_from_leaks_requires_catalog_dependency() -> None:
 
 def test_libc_candidates_from_leaks_writes_artifact_and_fact_for_unique_match(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
@@ -80,6 +81,18 @@ def test_libc_candidates_from_leaks_writes_artifact_and_fact_for_unique_match(
     service = LibcCatalogService(db_path=output_path)
     registry = EvidenceRegistry()
     infer = InferenceService(registry, libc_catalog=service)
+    success_messages: list[str] = []
+
+    class DummyLog:
+        @staticmethod
+        def success(message: str) -> None:
+            success_messages.append(message)
+
+        @staticmethod
+        def error(message: str) -> None:
+            raise AssertionError(message)
+
+    monkeypatch.setattr(inference_service_mod, "log", DummyLog())
 
     result = infer.libc_candidates_from_leaks(
         {
@@ -116,6 +129,7 @@ def test_libc_candidates_from_leaks_writes_artifact_and_fact_for_unique_match(
     assert base_fact.value == 0x7F0000000000
     assert base_fact.metadata["libc_id"] == 1
     assert base_fact.metadata["symbol"] == "puts"
+    assert success_messages == ["libc resolved: glibc-2.31-amd64"]
 
     service.close()
 
@@ -353,9 +367,11 @@ def test_libc_candidates_from_leaks_prints_candidates_when_multiple_and_unconfir
     assert len(result.candidates) == 2
     assert registry.get_fact("libc.version") is None
     assert registry.get_fact("libc.base") is None
-    assert "libc candidates:" in captured.out
-    assert "id=1 name=glibc-a" in captured.out
-    assert "id=2 name=glibc-b" in captured.out
+    assert "[+] Multiple libc candidates matched current leaks:" in captured.out
+    assert "  [0] glibc-a" in captured.out
+    assert "      matched=1  score=10.0  arch=amd64" in captured.out
+    assert "      symbols=puts" in captured.out
+    assert "  [1] glibc-b" in captured.out
 
     service.close()
 
@@ -400,7 +416,123 @@ def test_libc_candidates_from_leaks_logs_error_when_no_candidate_matches(
     service.close()
 
 
-def test_resolve_symbol_uses_catalog_offsets_and_alias_normalization(tmp_path: Path) -> None:
+def test_search_libc_uses_context_binary_arch_by_default_and_can_disable_single_arch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    output_path = tmp_path / "libc.db"
+    payload = [
+        {
+            "name": "glibc-amd64",
+            "arch": "amd64",
+            "build_id": "build-a",
+            "symbols": {"puts": "0x080aa0"},
+        },
+        {
+            "name": "glibc-i386",
+            "arch": "i386",
+            "build_id": "build-b",
+            "symbols": {"puts": "0x080aa0"},
+        },
+    ]
+    (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
+    build_libc_database(raw_dir=raw_dir, output_path=output_path)
+
+    class DummyBinary:
+        arch = "amd64"
+
+    class DummyContext:
+        binary = DummyBinary()
+
+    monkeypatch.setattr(inference_service_mod, "context", DummyContext())
+
+    service = LibcCatalogService(db_path=output_path)
+    registry = EvidenceRegistry()
+    infer = InferenceService(registry, libc_catalog=service)
+
+    narrowed = infer.libc_candidates_from_leaks(
+        {"puts": 0x7F0000000000 + 0x080AA0},
+        require_all=False,
+    )
+    expanded = infer.libc_candidates_from_leaks(
+        {"puts": 0x7F0000000000 + 0x080AA0},
+        require_all=False,
+        single_arch=False,
+    )
+
+    assert [candidate.name for candidate in narrowed.candidates] == ["glibc-amd64"]
+    assert [candidate.name for candidate in expanded.candidates] == [
+        "glibc-amd64",
+        "glibc-i386",
+    ]
+
+    service.close()
+
+
+def test_libc_candidates_from_leaks_groups_multi_arch_output_with_global_indexes(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    output_path = tmp_path / "libc.db"
+    payload = [
+        {
+            "name": "glibc-amd64-a",
+            "arch": "amd64",
+            "build_id": "build-a",
+            "symbols": {"puts": "0x080aa0"},
+        },
+        {
+            "name": "glibc-amd64-b",
+            "arch": "amd64",
+            "build_id": "build-b",
+            "symbols": {"puts": "0x080aa0"},
+        },
+        {
+            "name": "glibc-i386-a",
+            "arch": "i386",
+            "build_id": "build-c",
+            "symbols": {"puts": "0x080aa0"},
+        },
+    ]
+    (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
+    build_libc_database(raw_dir=raw_dir, output_path=output_path)
+
+    class DummyBinary:
+        arch = "amd64"
+
+    class DummyContext:
+        binary = DummyBinary()
+
+    monkeypatch.setattr(inference_service_mod, "context", DummyContext())
+
+    service = LibcCatalogService(db_path=output_path)
+    registry = EvidenceRegistry()
+    infer = InferenceService(registry, libc_catalog=service)
+    result = infer.libc_candidates_from_leaks(
+        {"puts": 0x7F0000000000 + 0x080AA0},
+        require_all=False,
+        single_arch=False,
+    )
+
+    captured = capsys.readouterr()
+    assert len(result.candidates) == 3
+    assert "Current arch (amd64):" in captured.out
+    assert "Other arch:" in captured.out
+    assert "  [0] glibc-amd64-a" in captured.out
+    assert "  [1] glibc-amd64-b" in captured.out
+    assert "  [2] glibc-i386-a" in captured.out
+
+    service.close()
+
+
+def test_resolve_symbol_uses_catalog_offsets_and_alias_normalization(
+    tmp_path: Path,
+) -> None:
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     output_path = tmp_path / "libc.db"

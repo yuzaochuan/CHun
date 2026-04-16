@@ -4,8 +4,13 @@ import json
 import sqlite3
 from pathlib import Path
 
-from chun.core.catalog import LibcCatalogRepository, LibcCatalogService, build_libc_database, load_schema
 import chun.core.catalog.builder as catalog_builder_mod
+from chun.core.catalog import (
+    LibcCatalogRepository,
+    LibcCatalogService,
+    build_libc_database,
+    load_schema,
+)
 from chun.core.errors import RegistryNotFoundError
 from chun.core.models import LibcLeakConstraint
 
@@ -90,7 +95,9 @@ def test_build_and_repository_queries_work_end_to_end(tmp_path: Path) -> None:
 
         assert strict_result.query_mode == "strict"
         assert strict_result.exact_match is True
-        assert [candidate.name for candidate in strict_result.candidates] == ["glibc-2.31-amd64"]
+        assert [candidate.name for candidate in strict_result.candidates] == [
+            "glibc-2.31-amd64"
+        ]
         assert strict_result.candidates[0].matched_symbols == ("puts", "__isoc99_scanf")
         assert strict_result.candidates[0].matched_count == 2
         assert strict_result.candidates[0].metadata["source"] == "unit-test"
@@ -141,7 +148,9 @@ def test_build_and_repository_queries_work_end_to_end(tmp_path: Path) -> None:
             assert row[0] == 0xAB0
             assert row[1] == 10.0
 
-            meta_rows = dict(connection.execute("SELECT key, value FROM dataset_meta").fetchall())
+            meta_rows = dict(
+                connection.execute("SELECT key, value FROM dataset_meta").fetchall()
+            )
             assert meta_rows["script_version"] == "1"
             assert meta_rows["libc_count"] == "3"
             assert meta_rows["build_mode"] == "core-only"
@@ -198,7 +207,9 @@ def test_build_all_mode_keeps_unknown_symbols_with_low_score(tmp_path: Path) -> 
             ("mystery_symbol", 0.1),
             ("puts", 10.0),
         ]
-        meta_rows = dict(connection.execute("SELECT key, value FROM dataset_meta").fetchall())
+        meta_rows = dict(
+            connection.execute("SELECT key, value FROM dataset_meta").fetchall()
+        )
         assert meta_rows["build_mode"] == "all"
     finally:
         connection.close()
@@ -231,7 +242,9 @@ def test_catalog_service_normalizes_aliases_and_suffixes(tmp_path: Path) -> None
             },
             arch="amd64",
         )
-        assert [candidate.name for candidate in result.candidates] == ["glibc-service-amd64"]
+        assert [candidate.name for candidate in result.candidates] == [
+            "glibc-service-amd64"
+        ]
 
         assert service.get_offset(1, "puts@got") == 0x080AA0
         assert service.get_offset(1, "scanf_plt") == 0x021AB0

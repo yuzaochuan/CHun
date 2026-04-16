@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Iterable
 
-from ..._compat import log
+from ..._compat import context, log
 from ..catalog import LibcCatalogService
 from ..errors import InferenceInputError
-from ..models import ArtifactKind, BaseInferenceResult, FactKind, ObservationKind, RecordDomain
+from ..models import (
+    ArtifactKind,
+    BaseInferenceResult,
+    FactKind,
+    ObservationKind,
+    RecordDomain,
+)
 from ..models.catalog import LibcCandidate, LibcSearchResult
 from ..registry import EvidenceRegistry
 
@@ -105,7 +112,8 @@ class InferenceService:
         self,
         leaks: dict[str, int],
         *,
-        arch: str | None = "amd64",
+        arch: str | None = None,
+        single_arch: bool = True,
         require_all: bool = True,
         min_match_count: int | None = None,
         limit: int = 50,
@@ -116,9 +124,15 @@ class InferenceService:
         if self.libc_catalog is None:
             raise InferenceInputError("缺少 libc_catalog 依赖。")
 
+        resolved_arch = (
+            arch
+            if arch is not None
+            else self._infer_search_arch(single_arch=single_arch)
+        )
+
         result = self.libc_catalog.find_candidates(
             leaks,
-            arch=arch,
+            arch=resolved_arch,
             require_all=require_all,
             min_match_count=min_match_count,
             limit=limit,
@@ -156,10 +170,15 @@ class InferenceService:
                 overwrite=True,
             )
             self._auto_record_libc_base(target_candidate.libc_id, leaks)
+            if index is None and len(result.candidates) == 1:
+                log.success(f"libc resolved: {target_candidate.name}")
         elif len(result.candidates) == 0:
             log.error("未找到符合当前条件的 libc 候选。")
         elif len(result.candidates) > 1:
-            self._print_candidates(result.candidates)
+            current_arch = (
+                None if single_arch else self._infer_search_arch(single_arch=True)
+            )
+            self._print_candidates(result.candidates, current_arch=current_arch)
         return result
 
     def _select_target_candidate(
@@ -204,19 +223,86 @@ class InferenceService:
         )
 
     @staticmethod
-    def _print_candidates(candidates: Iterable[LibcCandidate]) -> None:
+    def _print_candidate(index: int, candidate: LibcCandidate) -> None:
+        total_score = candidate.metadata.get("total_score")
+        score = float(total_score) if total_score is not None else 0.0
+        symbols = ", ".join(candidate.matched_symbols)
+        print(f"  [{index}] {candidate.name}")
+        print(
+            f"      matched={candidate.matched_count}  "
+            f"score={score:.1f}  arch={candidate.arch}"
+        )
+        print(f"      symbols={symbols}")
+        print()
+
+    @classmethod
+    def _print_candidates(
+        cls,
+        candidates: Iterable[LibcCandidate],
+        *,
+        current_arch: str | None = None,
+    ) -> None:
         """在多候选场景下输出候选列表，便于外部爆破逻辑选取。"""
-        print("libc candidates:")
-        for candidate in candidates:
-            print(
-                f"- id={candidate.libc_id} name={candidate.name} "
-                f"arch={candidate.arch} matched={candidate.matched_count}"
-            )
+        candidate_list = tuple(candidates)
+        print("[+] Multiple libc candidates matched current leaks:")
+        print()
+        if current_arch is None:
+            for index, candidate in enumerate(candidate_list):
+                cls._print_candidate(index, candidate)
+            return
+
+        current_bucket = [
+            (index, candidate)
+            for index, candidate in enumerate(candidate_list)
+            if candidate.arch == current_arch
+        ]
+        other_bucket = [
+            (index, candidate)
+            for index, candidate in enumerate(candidate_list)
+            if candidate.arch != current_arch
+        ]
+
+        if current_bucket:
+            print(f"Current arch ({current_arch}):")
+            for index, candidate in current_bucket:
+                cls._print_candidate(index, candidate)
+        if other_bucket:
+            print("Other arch:")
+            for index, candidate in other_bucket:
+                cls._print_candidate(index, candidate)
+
+    @staticmethod
+    def _normalize_search_arch(raw_arch: str | None) -> str | None:
+        if raw_arch is None:
+            return None
+        normalized = raw_arch.strip().lower()
+        aliases = {
+            "x86_64": "amd64",
+            "amd64": "amd64",
+            "i386": "i386",
+            "i686": "i386",
+            "x86": "i386",
+            "aarch64": "arm64",
+            "arm64": "arm64",
+        }
+        return aliases.get(normalized, normalized)
+
+    def _infer_search_arch(self, *, single_arch: bool) -> str | None:
+        if not single_arch:
+            return None
+        with suppress(Exception):
+            binary = getattr(context, "binary", None)
+            raw_arch = getattr(binary, "arch", None)
+            normalized = self._normalize_search_arch(raw_arch)
+            if normalized:
+                return normalized
+        return None
 
     def search_libc(
         self,
         *,
-        arch: str | None = "amd64",
+        arch: str | None = None,
+        single_arch: bool = True,
         require_all: bool = True,
         min_match_count: int | None = None,
         limit: int = 50,
@@ -244,6 +330,7 @@ class InferenceService:
         return self.libc_candidates_from_leaks(
             leaks,
             arch=arch,
+            single_arch=single_arch,
             require_all=require_all,
             min_match_count=min_match_count,
             limit=limit,

@@ -1,19 +1,18 @@
 """脚本模式 facade。"""
 
 from __future__ import annotations
-
 import sys
 import termios
 import tty
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 from ._compat import ELF, args, context, gdb, log, pause
 from .bridges.gdb import PwntoolsGdbBridge
 from .core.analysis import CorefileAnalyzer
 from .core.errors import TransportConfigError
 from .core.inference import InferenceService
-from .core.models import TargetSpec
+from .core.models import RecordDomain, TargetSpec
 from .core.registry import EvidenceRegistry
 from .core.resolve import ResolveService
 from .transports.pwntools_tube import PwntoolsTubeTransport
@@ -308,6 +307,100 @@ class ScriptEntry:
     def recvline(self, keepends: bool = True) -> bytes:
         """转发到当前 `io.recvline()`。"""
         return self.io.recvline(keepends=keepends)
+
+    @staticmethod
+    def _coerce_delim_or_regex(value: bytes | str, *, field_name: str) -> bytes | str:
+        if isinstance(value, (bytes, str)):
+            return value
+        raise ValueError(f"{field_name} 必须是 bytes 或 str。")
+
+    @staticmethod
+    def _extract_regex_capture(match: object) -> bytes:
+        if isinstance(match, bytes):
+            return match
+        if isinstance(match, str):
+            return match.encode()
+        if hasattr(match, "group"):
+            groups = match.groups()  # type: ignore[attr-defined]
+            if groups:
+                group = groups[0]
+            else:
+                group = match.group(1)  # type: ignore[attr-defined]
+            if isinstance(group, bytes):
+                return group
+            if isinstance(group, str):
+                return group.encode()
+            raise ValueError("regex capture 必须是 bytes 或 str。")
+        if isinstance(match, (tuple, list)) and match:
+            group = match[0]
+            if isinstance(group, bytes):
+                return group
+            if isinstance(group, str):
+                return group.encode()
+        raise ValueError("recvregex(capture=True) 未返回可用的捕获组。")
+
+    def recv_leak(
+        self,
+        name: str,
+        delim: bytes | str | None = None,
+        *,
+        regex: bytes | str | None = None,
+        domain: RecordDomain | None = None,
+        offset: int = 0,
+        source: str = "leak",
+        mode: Literal["raw", "hex"] = "raw",
+        size: int | None = None,
+        strip_newline: bool = True,
+    ) -> int:
+        """接收一个泄漏值，完成解析、修正并自动写入 registry。"""
+        if delim is not None and regex is not None:
+            raise ValueError("delim 和 regex 不能同时提供。")
+        if mode not in {"raw", "hex"}:
+            raise ValueError("mode 必须是 'raw' 或 'hex'。")
+
+        resolved_domain = domain or RecordDomain.LIBC
+        payload: bytes
+
+        if regex is not None:
+            compiled = self._coerce_delim_or_regex(regex, field_name="regex")
+            matched = self.recvregex(compiled, capture=True)
+            payload = self._extract_regex_capture(matched)
+        else:
+            if delim is not None:
+                resolved_delim = self._coerce_delim_or_regex(delim, field_name="delim")
+                self.recvuntil(resolved_delim)
+            if mode == "raw":
+                default_size = 4 if int(getattr(self.elf, "bits", 64)) <= 32 else 6
+                payload = self.recv(size or default_size)
+                if strip_newline:
+                    payload = payload.rstrip(b"\r\n")
+            else:
+                payload = self.recvline(keepends=not strip_newline)
+                if strip_newline:
+                    payload = payload.strip()
+
+        if mode == "raw":
+            pointer_width = int(getattr(self.elf, "bytes", 8))
+            leak_bytes = payload[:pointer_width]
+            leak_val = int.from_bytes(leak_bytes.ljust(pointer_width, b"\x00"), "little")
+        else:
+            text = payload.decode().strip()
+            if not text:
+                raise ValueError("未读取到可解析的十六进制泄漏。")
+            try:
+                leak_val = int(text, 16)
+            except ValueError as exc:
+                raise ValueError(f"无法解析十六进制泄漏：{text}") from exc
+
+        actual_val = leak_val - offset
+        self.rec.record_symbol_leak(
+            name,
+            actual_val,
+            domain=resolved_domain,
+            source=source,
+        )
+        log.success(f"Leak [{name}] captured: {hex(actual_val)}")
+        return actual_val
 
     def interactive(self) -> None:
         """转发到当前 `io.interactive()`。"""

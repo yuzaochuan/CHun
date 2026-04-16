@@ -114,10 +114,20 @@
 1. 只扫描 `domain=LIBC` 且 `kind=SYMBOL_LEAK` 的 observation
 2. 跳过非整数地址
 3. 同名 symbol 出现多次时，优先采用更高 `confidence` 的记录
-4. 支持 `index=...`，用于多候选场景下按排名静默确认目标版本
-5. 若没有可用 leak，则抛 `InferenceInputError`
+4. 支持 `single_arch=True`：若调用方未显式传 `arch`，则尽量从当前上下文推断单一架构收窄候选
+5. 支持 `index=...`，用于多候选场景下按排名静默确认目标版本
+6. 若没有可用 leak，则抛 `InferenceInputError`
 
-若命中多个候选且没有传 `index`，系统会保留 `libc.candidates` artifact，并输出候选列表供外部爆破逻辑使用，但不会写入 `libc.version` / `libc.base`。
+若命中多个候选且没有传 `index`，系统会保留 `libc.candidates` artifact，并按 `index + matched + score + arch + symbols` 的格式输出候选列表供外部爆破逻辑使用，但不会写入 `libc.version` / `libc.base`。
+
+当 `single_arch=False` 且当前上下文仍然能推断出主架构时，候选展示会分为两段：
+
+- `Current arch (...)`
+- `Other arch`
+
+这里的分组只影响显示，不影响底层候选顺序；`index` 始终是全局统一编号，因此 `index=0/1/2...` 仍然稳定命中对应候选。
+
+若命中唯一候选，系统会自动确认并通过 `log.success(...)` 输出一条简短成功消息，例如 `libc resolved: libc6_2.39-0ubuntu8.6_amd64`。
 
 `session.resolve.symbol(name)` 则会继续消费事实层：
 
