@@ -88,8 +88,14 @@ class ScriptEntry:
         if isinstance(tls, dict):
             tls["binary"] = binary
             return
+        if tls is not None:
+            try:
+                setattr(tls, "binary", binary)
+                return
+            except Exception:
+                pass
 
-        setattr(context, "binary", binary)
+        object.__setattr__(context, "binary", binary)
 
     def _load_libc(self) -> Any:
         libc_path = self.target.libc
@@ -231,6 +237,24 @@ class ScriptEntry:
     def libc(self) -> Any:
         """返回脚本初始化时解析出的 libc `ELF` 对象。"""
         return self._libc
+
+    @property
+    def libc_base(self) -> int:
+        """返回当前 session 中已确认的 libc base。"""
+        fact = self.rec.get_fact("libc.base")
+        if fact is None or not isinstance(fact.value, int):
+            raise RuntimeError(
+                "libc.base 尚未推导，可能是多候选情况，请明确指定或编写爆破逻辑。"
+            )
+        return fact.value
+
+    @property
+    def libc_version(self) -> str:
+        """返回当前 session 中已确认的 libc 版本名。"""
+        fact = self.rec.get_fact("libc.version")
+        if fact is None or not isinstance(fact.value, str):
+            raise RuntimeError("libc.version 尚未确认。")
+        return fact.value
 
     @property
     def rec(self) -> EvidenceRegistry:

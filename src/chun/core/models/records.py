@@ -69,6 +69,7 @@ class ArtifactKind(str, Enum):
     """可复用产物的语义类型。"""
 
     GENERIC = "generic"
+    CATALOG_RESULT = "catalog-result"
     PAYLOAD = "payload"
     ROP_CHAIN = "rop-chain"
     TEMPLATE_RENDER = "template-render"

@@ -35,7 +35,7 @@ where = ["src"]
 include = ["chun*"]
 
 [tool.setuptools.package-data]
-chun = ["templates/*.tpl"]
+chun = ["templates/*.tpl", "core/catalog/*.sql", "core/catalog/*.yaml"]
 
 [tool.pytest.ini_options]
 addopts = "-q --import-mode=importlib"
