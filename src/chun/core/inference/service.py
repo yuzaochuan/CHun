@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from typing import TYPE_CHECKING
 from typing import Iterable
 
-from ..._compat import context, log
+from ..._compat import log
 from ..catalog import LibcCatalogService
 from ..errors import InferenceInputError
 from ..models import (
@@ -18,6 +19,9 @@ from ..models import (
 from ..models.catalog import LibcCandidate, LibcSearchResult
 from ..registry import EvidenceRegistry
 
+if TYPE_CHECKING:
+    from ..session import CHunSession
+
 
 class InferenceService:
     """第二阶段最小可用 inference 入口。"""
@@ -28,10 +32,12 @@ class InferenceService:
         page_size: int = 0x1000,
         *,
         libc_catalog: LibcCatalogService | None = None,
+        session: "CHunSession | None" = None,
     ) -> None:
         self.registry = registry
         self.page_size = page_size
         self.libc_catalog = libc_catalog
+        self.session = session
 
     def _infer_base_from_symbol_leak(
         self,
@@ -127,7 +133,7 @@ class InferenceService:
         resolved_arch = (
             arch
             if arch is not None
-            else self._infer_search_arch(single_arch=single_arch)
+            else self._infer_search_arch(single_arch=single_arch, strict=True)
         )
 
         result = self.libc_catalog.find_candidates(
@@ -176,7 +182,9 @@ class InferenceService:
             log.error("未找到符合当前条件的 libc 候选。")
         elif len(result.candidates) > 1:
             current_arch = (
-                None if single_arch else self._infer_search_arch(single_arch=True)
+                None
+                if single_arch
+                else self._infer_search_arch(single_arch=True, strict=False)
             )
             self._print_candidates(result.candidates, current_arch=current_arch)
         return result
@@ -287,15 +295,55 @@ class InferenceService:
         }
         return aliases.get(normalized, normalized)
 
-    def _infer_search_arch(self, *, single_arch: bool) -> str | None:
+    @staticmethod
+    def _infer_arch_from_bits(bits: int | None) -> str | None:
+        if bits == 64:
+            return "amd64"
+        if bits == 32:
+            return "i386"
+        return None
+
+    def _infer_search_arch(self, *, single_arch: bool, strict: bool = True) -> str | None:
         if not single_arch:
             return None
-        with suppress(Exception):
-            binary = getattr(context, "binary", None)
-            raw_arch = getattr(binary, "arch", None)
+
+        raw_arch = None
+        raw_bits = None
+
+        if self.session is not None and self.session.elf is not None:
+            raw_arch = getattr(self.session.elf, "arch", None)
+            raw_bits = getattr(self.session.elf, "bits", None)
             normalized = self._normalize_search_arch(raw_arch)
             if normalized:
                 return normalized
+
+        with suppress(Exception):
+            binary_arch = self.registry.require_context("binary.arch").value
+            if isinstance(binary_arch, str):
+                normalized = self._normalize_search_arch(binary_arch)
+                if normalized:
+                    return normalized
+
+        with suppress(Exception):
+            binary_bits = self.registry.require_context("binary.bits").value
+            if isinstance(binary_bits, int):
+                raw_bits = binary_bits
+
+        with suppress(Exception):
+            arch_bits = self.registry.require_context("arch.bits").value
+            if isinstance(arch_bits, int):
+                raw_bits = arch_bits
+
+        inferred = self._infer_arch_from_bits(raw_bits)
+        if inferred is not None:
+            return inferred
+
+        if strict:
+            bits_suffix = f"，当前仅拿到 bits={raw_bits}" if isinstance(raw_bits, int) else ""
+            raise InferenceInputError(
+                "无法确定当前检索架构，请先绑定 session.elf 或写入 binary.arch 上下文"
+                f"{bits_suffix}。"
+            )
         return None
 
     def search_libc(

@@ -172,6 +172,48 @@ class EvidenceRegistry:
     def get_context(self, name: str) -> ContextEntry | None:
         return self.context.get(name)
 
+    def require_observation(self, name: str) -> Observation:
+        record = self.get_observation(name)
+        if record is None:
+            raise KeyError(f"observation 不存在：{name}")
+        return record
+
+    def require_fact(self, name: str) -> Fact:
+        record = self.get_fact(name)
+        if record is None:
+            raise KeyError(f"fact 不存在：{name}")
+        return record
+
+    def require_artifact(self, name: str) -> Artifact:
+        record = self.get_artifact(name)
+        if record is None:
+            raise KeyError(f"artifact 不存在：{name}")
+        return record
+
+    def require_context(self, name: str) -> ContextEntry:
+        record = self.get_context(name)
+        if record is None:
+            raise KeyError(f"context 不存在：{name}")
+        return record
+
+    def require_int_observation(self, name: str) -> int:
+        record = self.require_observation(name)
+        if not isinstance(record.value, int):
+            raise TypeError(f"observation[{name}] 不是 int：{type(record.value).__name__}")
+        return record.value
+
+    def require_int_fact(self, name: str) -> int:
+        record = self.require_fact(name)
+        if not isinstance(record.value, int):
+            raise TypeError(f"fact[{name}] 不是 int：{type(record.value).__name__}")
+        return record.value
+
+    def require_str_fact(self, name: str) -> str:
+        record = self.require_fact(name)
+        if not isinstance(record.value, str):
+            raise TypeError(f"fact[{name}] 不是 str：{type(record.value).__name__}")
+        return record.value
+
     @staticmethod
     def _match_record(
         record: Observation | Fact | Artifact | ContextEntry,

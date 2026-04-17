@@ -65,6 +65,18 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - `crash`：`CorefileAnalyzer`
 - `io`：延迟打开后的 transport 访问入口
 - `raw`：底层原始连接对象
+- `elf` / `libc_elf`：当前会话绑定的运行时 ELF / libc ELF 对象
+
+运行时富对象的标准绑定入口是：
+
+- `session.bind_binaries(elf=..., libc_elf=...)`
+
+它会：
+
+- 把富对象挂到 `session.elf` / `session.libc_elf`
+- 同步写入规范化标量 context，例如 `binary.path` / `binary.arch` / `arch.bits` / `libc.path`
+
+不会把 ELF / libc ELF 对象本身写入 registry context。
 
 其中推荐把下面这些看作下一阶段插件开发的稳定挂接点：
 
@@ -98,8 +110,13 @@ t.start()
 
 t.sla(b"menu> ", b"1")
 t.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
-t.recv_leak("puts", delim=b"puts: ")
+leak = t.recv_leak("puts", delim=b"puts: ")
+print(hex(leak))
 t.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
+print(hex(t.libc_base))
+
+session = t.session
+print(hex(session.libc_base))
 t.gdb("b *main\nc")
 ```
 
@@ -113,19 +130,21 @@ t.gdb("b *main\nc")
 - `REMOTE GDB` 时只 warning，不会 attach
 - `t.target` 是当前脚本入口使用的 `TargetSpec` 配置对象
 - `t.start()` 返回 `t` 自身，因此 `t = CHun.script(...).start()` 与 `t = CHun.script(...); t.start()` 都可用
-- `t.start()` 会把脚本态已加载的 `t.elf` / `t.libc` 绑定为 `t.resolve` 的默认解析对象
+- `t.start()` 会通过 `session.bind_binaries()` 绑定脚本态已加载的 `t.elf` / `t.libc`
 - `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 会显式转发到当前 session
+- `t.session` 是属性，不是方法；用于直接访问当前已启动的完整 `CHunSession`
 - `t.resolve.libc_base_from_elf_symbol(..., symbol="puts")` 在脚本态可直接复用默认 `t.libc`，无需重复传 `libc_elf=t.libc`
 - `t.resolve.pie_base_from_elf_symbol(..., symbol="main")` 在脚本态可直接复用默认 `t.elf`
-- `t.infer.search_libc()` 会从事实层自动扫描 `RecordDomain.LIBC` 的 symbol leak
+- `t.infer.search_libc()` 会从事实层自动扫描 `RecordDomain.LIBC` 的 symbol leak，并优先使用 `session.elf` / 已同步的标量 context 推断架构
 - `t.infer.search_libc(index=...)` 可在多候选场景下按候选排名静默确认目标版本，并自动回写 `libc.version + libc.base`
 - `t.recv_leak(name, ...)` 会在脚本 façade 层完成“接收 -> 解析 -> offset 修正 -> `record_symbol_leak()` 回写”
+- `t.recv_leak(...)` 的返回值就是解析后的整数泄漏；脚本态优先直接使用返回值，而不是再手动 `get_observation(...).value`
 - `t.recv_leak(name)` 支持没有明显前缀的场景：若不传 `delim` / `regex`，会直接按当前 `mode` 从流中读取泄漏值
 - `t.recv_leak(..., mode="raw")` 默认按常见 CTF 泄漏习惯读取 32 位 `4` 字节、64 位 `6` 字节，再按 `t.elf.bytes` 补零解析
 - `t.recv_leak(..., mode="hex")` 支持 `0x...` 十六进制字符串解析
-- `t.libc_base` / `t.libc_version` 提供脚本态快捷读取；若尚未确认则抛 `RuntimeError`
+- `t.libc_base` / `t.libc_version` 以及 `t.session.libc_base` / `t.session.libc_version` 提供快捷读取；若尚未确认则抛 `RuntimeError`
 - `t.resolve.symbol("str_bin_sh")` / `t.resolve.symbol("puts@got")` 会自动做后缀剥离和 alias 归一化，再结合 `libc.base + libc.version` 解析绝对地址
-- 访问 `t.as_session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
+- 访问 `t.session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
 - 高频交互方法可直接使用 `t.sendlineafter()` / `t.recvline()` / `t.interactive()` 及其 alias
 - 低频 tube 方法通过 `__getattr__` fallback 到 `t.io`
 - `with CHun.script(...) as t:` 会自动 `start()` 并打开/关闭底层 transport

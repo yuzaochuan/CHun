@@ -4,12 +4,63 @@ import json
 from pathlib import Path
 
 import chun.core.inference.service as inference_service_mod
+import pytest
+from chun import CHunSession
 from chun.core.catalog import LibcCatalogService, build_libc_database
 from chun.core.errors import InferenceInputError, ResolverError
 from chun.core.inference import InferenceService
-from chun.core.models import ArtifactKind, FactKind, ObservationKind, RecordDomain
+from chun.core.models import (
+    ArtifactKind,
+    FactKind,
+    ObservationKind,
+    RecordDomain,
+    TargetSpec,
+    TransportSpec,
+)
 from chun.core.registry import EvidenceRegistry
 from chun.core.resolve import ResolveService
+
+
+class DummyTransport:
+    is_open = False
+    raw = object()
+
+    def open(self) -> None:
+        self.is_open = True
+
+    def close(self) -> None:
+        self.is_open = False
+
+    def reconnect(self) -> None:
+        self.is_open = True
+
+
+class DummyElf:
+    def __init__(
+        self,
+        *,
+        path: str = "./challenge",
+        arch: str | None = "amd64",
+        bits: int = 64,
+        bytes_: int = 8,
+        endian: str = "little",
+        sym: dict[str, int] | None = None,
+    ) -> None:
+        self.path = path
+        self.arch = arch
+        self.bits = bits
+        self.bytes = bytes_
+        self.endian = endian
+        self.sym = {} if sym is None else sym
+
+
+def build_session(*, libc_catalog: LibcCatalogService | None = None) -> CHunSession:
+    return CHunSession(
+        target=TargetSpec(kind="process"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyTransport(),
+        libc_catalog=LibcCatalogService() if libc_catalog is None else libc_catalog,
+    )
 
 
 def test_libc_base_inference_creates_fact_from_symbol_leak_observation() -> None:
@@ -98,7 +149,8 @@ def test_libc_candidates_from_leaks_writes_artifact_and_fact_for_unique_match(
         {
             "puts": 0x7F0000000000 + 0x080AA0,
             "__isoc99_scanf": 0x7F0000000000 + 0x021AB0,
-        }
+        },
+        arch="amd64",
     )
 
     assert len(result.candidates) == 1
@@ -163,7 +215,10 @@ def test_search_libc_scans_registry_and_prefers_higher_confidence_symbol_leaks(
     (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
     build_libc_database(raw_dir=raw_dir, output_path=output_path, include_all=True)
 
-    registry = EvidenceRegistry()
+    service = LibcCatalogService(db_path=output_path)
+    session = build_session(libc_catalog=service)
+    session.bind_binaries(elf=DummyElf(arch="amd64"))
+    registry = session.registry
     registry.record_symbol_leak(
         "puts",
         0x7F0000000000 + 0x090AA0,
@@ -202,9 +257,7 @@ def test_search_libc_scans_registry_and_prefers_higher_confidence_symbol_leaks(
         source="elf",
     )
 
-    service = LibcCatalogService(db_path=output_path)
-    infer = InferenceService(registry, libc_catalog=service)
-    result = infer.search_libc()
+    result = session.infer.search_libc()
 
     assert [candidate.name for candidate in result.candidates] == ["glibc-2.31-amd64"]
 
@@ -279,6 +332,7 @@ def test_libc_candidates_from_leaks_can_confirm_candidate_by_index_and_auto_reco
         {"puts": 0x7F0000000000 + 0x080AA0},
         require_all=False,
         index=1,
+        arch="amd64",
     )
 
     assert len(result.candidates) == 2
@@ -322,6 +376,7 @@ def test_libc_candidates_from_leaks_raises_when_index_is_out_of_range(
         infer.libc_candidates_from_leaks(
             {"puts": 0x7F0000000000 + 0x080AA0},
             index=99,
+            arch="amd64",
         )
     except InferenceInputError:
         pass
@@ -361,6 +416,7 @@ def test_libc_candidates_from_leaks_prints_candidates_when_multiple_and_unconfir
     result = infer.libc_candidates_from_leaks(
         {"puts": 0x7F0000000000 + 0x080AA0},
         require_all=False,
+        arch="amd64",
     )
 
     captured = capsys.readouterr()
@@ -408,6 +464,7 @@ def test_libc_candidates_from_leaks_logs_error_when_no_candidate_matches(
     infer = InferenceService(registry, libc_catalog=service)
     result = infer.libc_candidates_from_leaks(
         {"puts": 0x7F0000000000 + 0x180AA1},
+        arch="amd64",
     )
 
     assert result.candidates == []
@@ -418,7 +475,6 @@ def test_libc_candidates_from_leaks_logs_error_when_no_candidate_matches(
 
 def test_search_libc_uses_context_binary_arch_by_default_and_can_disable_single_arch(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
@@ -440,23 +496,15 @@ def test_search_libc_uses_context_binary_arch_by_default_and_can_disable_single_
     (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
     build_libc_database(raw_dir=raw_dir, output_path=output_path)
 
-    class DummyBinary:
-        arch = "amd64"
-
-    class DummyContext:
-        binary = DummyBinary()
-
-    monkeypatch.setattr(inference_service_mod, "context", DummyContext())
-
     service = LibcCatalogService(db_path=output_path)
-    registry = EvidenceRegistry()
-    infer = InferenceService(registry, libc_catalog=service)
+    session = build_session(libc_catalog=service)
+    session.bind_binaries(elf=DummyElf(arch="amd64"))
 
-    narrowed = infer.libc_candidates_from_leaks(
+    narrowed = session.infer.libc_candidates_from_leaks(
         {"puts": 0x7F0000000000 + 0x080AA0},
         require_all=False,
     )
-    expanded = infer.libc_candidates_from_leaks(
+    expanded = session.infer.libc_candidates_from_leaks(
         {"puts": 0x7F0000000000 + 0x080AA0},
         require_all=False,
         single_arch=False,
@@ -473,7 +521,6 @@ def test_search_libc_uses_context_binary_arch_by_default_and_can_disable_single_
 
 def test_libc_candidates_from_leaks_groups_multi_arch_output_with_global_indexes(
     tmp_path: Path,
-    monkeypatch,
     capsys,
 ) -> None:
     raw_dir = tmp_path / "raw"
@@ -502,18 +549,10 @@ def test_libc_candidates_from_leaks_groups_multi_arch_output_with_global_indexes
     (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
     build_libc_database(raw_dir=raw_dir, output_path=output_path)
 
-    class DummyBinary:
-        arch = "amd64"
-
-    class DummyContext:
-        binary = DummyBinary()
-
-    monkeypatch.setattr(inference_service_mod, "context", DummyContext())
-
     service = LibcCatalogService(db_path=output_path)
-    registry = EvidenceRegistry()
-    infer = InferenceService(registry, libc_catalog=service)
-    result = infer.libc_candidates_from_leaks(
+    session = build_session(libc_catalog=service)
+    session.rec.set_context("binary.arch", "amd64", domain=RecordDomain.ELF)
+    result = session.infer.libc_candidates_from_leaks(
         {"puts": 0x7F0000000000 + 0x080AA0},
         require_all=False,
         single_arch=False,
@@ -526,6 +565,81 @@ def test_libc_candidates_from_leaks_groups_multi_arch_output_with_global_indexes
     assert "  [0] glibc-amd64-a" in captured.out
     assert "  [1] glibc-amd64-b" in captured.out
     assert "  [2] glibc-i386-a" in captured.out
+
+    service.close()
+
+
+def test_libc_candidates_from_leaks_raises_when_arch_is_required_but_unavailable(
+    tmp_path: Path,
+) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    output_path = tmp_path / "libc.db"
+    payload = [
+        {
+            "name": "glibc-amd64",
+            "arch": "amd64",
+            "build_id": "build-a",
+            "symbols": {"puts": "0x080aa0"},
+        }
+    ]
+    (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
+    build_libc_database(raw_dir=raw_dir, output_path=output_path)
+
+    service = LibcCatalogService(db_path=output_path)
+    session = build_session(libc_catalog=service)
+
+    with pytest.raises(InferenceInputError, match="无法确定当前检索架构"):
+        session.infer.libc_candidates_from_leaks(
+            {"puts": 0x7F0000000000 + 0x080AA0},
+            require_all=False,
+        )
+
+    service.close()
+
+
+def test_libc_candidates_from_leaks_can_infer_arch_from_bits_context(
+    tmp_path: Path,
+) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    output_path = tmp_path / "libc.db"
+    payload = [
+        {
+            "name": "glibc-amd64",
+            "arch": "amd64",
+            "build_id": "build-a",
+            "symbols": {"puts": "0x080aa0"},
+        },
+        {
+            "name": "glibc-i386",
+            "arch": "i386",
+            "build_id": "build-b",
+            "symbols": {"puts": "0x080aa0"},
+        },
+    ]
+    (raw_dir / "sample.json").write_text(json.dumps(payload), encoding="utf-8")
+    build_libc_database(raw_dir=raw_dir, output_path=output_path)
+
+    service = LibcCatalogService(db_path=output_path)
+    session = build_session(libc_catalog=service)
+    session.rec.set_context("binary.bits", 64, domain=RecordDomain.ELF)
+    narrowed = session.infer.libc_candidates_from_leaks(
+        {"puts": 0x7F0000000000 + 0x080AA0},
+        require_all=False,
+    )
+
+    session = build_session(libc_catalog=service)
+    session.rec.set_context("arch.bits", 64, domain=RecordDomain.ELF)
+    narrowed_via_arch_bits = session.infer.libc_candidates_from_leaks(
+        {"puts": 0x7F0000000000 + 0x080AA0},
+        require_all=False,
+    )
+
+    assert [candidate.name for candidate in narrowed.candidates] == ["glibc-amd64"]
+    assert [candidate.name for candidate in narrowed_via_arch_bits.candidates] == [
+        "glibc-amd64"
+    ]
 
     service.close()
 
@@ -587,3 +701,67 @@ def test_resolve_symbol_raises_when_required_facts_are_missing() -> None:
         pass
     else:
         raise AssertionError("expected ResolverError")
+
+
+def test_resolve_uses_session_bound_libc_elf_for_base_inference() -> None:
+    session = build_session()
+    libc = DummyElf(path="./libc.so.6", sym={"puts": 0x80000})
+
+    session.bind_binaries(libc_elf=libc)
+    session.rec.record_symbol_leak(
+        "puts",
+        0x7F1234500000 + 0x80000,
+        domain=RecordDomain.LIBC,
+        source="got",
+    )
+    result = session.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
+
+    assert session.libc_elf is libc
+    assert session.rec.require_context("libc.path").value == "./libc.so.6"
+    assert result.value == 0x7F1234500000
+
+
+def test_resolve_libc_base_from_elf_symbol_raises_without_explicit_or_session_libc() -> None:
+    session = build_session()
+    session.rec.record_symbol_leak(
+        "puts",
+        0x7F1234500000 + 0x80000,
+        domain=RecordDomain.LIBC,
+        source="got",
+    )
+
+    with pytest.raises(ResolverError, match="缺少可用的 libc_elf / elf"):
+        session.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
+
+
+def test_resolve_pie_base_from_elf_symbol_raises_without_explicit_or_session_elf() -> None:
+    session = build_session()
+    session.rec.record_symbol_leak(
+        "main",
+        0x555555554000 + 0x1234,
+        domain=RecordDomain.ELF,
+        source="plt",
+    )
+
+    with pytest.raises(ResolverError, match="缺少可用的 elf"):
+        session.resolve.pie_base_from_elf_symbol("main", symbol="main")
+
+
+def test_resolve_prefers_explicit_symbol_source_over_session_binding() -> None:
+    session = build_session()
+    session.bind_binaries(libc_elf=DummyElf(path="./session-libc.so.6", sym={"puts": 0x90000}))
+    explicit_libc = DummyElf(path="./explicit-libc.so.6", sym={"puts": 0x80000})
+
+    session.rec.record_symbol_leak(
+        "puts",
+        0x7F1234500000 + 0x80000,
+        domain=RecordDomain.LIBC,
+        source="got",
+    )
+    result = session.resolve.libc_base_from_elf_symbol(
+        "puts",
+        libc_elf=explicit_libc,
+        symbol="puts",
+    )
+
+    assert result.value == 0x7F1234500000
