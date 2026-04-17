@@ -32,7 +32,7 @@
 
 ## 数据模型与枚举
 
-职责：提供 `TargetSpec` / `TransportSpec`、Registry 相关数据模型，以及 libc catalog 的结构化查询结果对象。
+职责：提供 `TargetSpec` / `TransportSpec`、Registry 相关数据模型、FMT 计划模型，以及 libc catalog 的结构化查询结果对象。
 
 详见：[Models API](models.md)
 

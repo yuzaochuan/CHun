@@ -95,6 +95,7 @@ class DummySession:
     open_calls: int = 0
     close_calls: int = 0
     reconnect_calls: int = 0
+    bind_binaries_calls: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.target = type("Target", (), {"kind": self.kind})()
@@ -113,6 +114,21 @@ class DummySession:
     def reconnect(self) -> None:
         self.reconnect_calls += 1
 
+    def bind_binaries(
+        self,
+        *,
+        elf: object | None = None,
+        libc_elf: object | None = None,
+        source: str = "session",
+    ) -> None:
+        self.bind_binaries_calls.append(
+            {
+                "elf": elf,
+                "libc_elf": libc_elf,
+                "source": source,
+            }
+        )
+
 
 @dataclass
 class FakeELF:
@@ -120,6 +136,8 @@ class FakeELF:
     libc: Any = None
     bits: int = 64
     bytes: int = 8
+    little_endian: bool = True
+    arch: str = "amd64"
 
 
 @pytest.fixture
@@ -480,15 +498,14 @@ def test_script_uses_explicit_libc_when_provided(
     ]
 
 
-def test_script_start_binds_default_elf_and_libc_to_resolve(
+def test_script_start_calls_session_bind_binaries(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
 ) -> None:
     session = DummySession(kind="process")
-    bind_calls: list[dict[str, Any]] = []
     session.resolve = SimpleNamespace(
         name="resolve",
-        bind_defaults=lambda **kwargs: bind_calls.append(kwargs),
+        bind_defaults=lambda **_: None,
     )
 
     def fake_from_specs(
@@ -503,7 +520,13 @@ def test_script_start_binds_default_elf_and_libc_to_resolve(
     entry = CHun.script("./challenge", libc="./libc.so.6")
     entry.start()
 
-    assert bind_calls == [{"elf": entry.elf, "libc_elf": entry.libc}]
+    assert session.bind_binaries_calls == [
+        {
+            "elf": entry.elf,
+            "libc_elf": entry.libc,
+            "source": "script",
+        }
+    ]
 
 
 def test_script_start_is_chainable(

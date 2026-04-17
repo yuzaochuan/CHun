@@ -20,6 +20,20 @@
 - `LibcLeakConstraint`
 - `LibcCandidate`
 - `LibcSearchResult`
+- `FmtTargetRef`
+- `FmtValueRef`
+- `FmtOffset`
+- `FmtLeak`
+- `FmtWriteRequest`
+- `FmtWriteAtom`
+- `FmtWriteTask`
+- `FmtWritePlan`
+- `FmtRenderStep`
+- `RenderedFmtTask`
+- `FmtWriteStrategy`
+- `FmtReadMode`
+- `FmtTaskPolicy`
+- `FmtLayoutPolicy`
 
 ## `TargetSpec`
 
@@ -85,6 +99,43 @@
 - `GdbMiResult`：承载结构化 GDB/MI 命令结果
 
 模型层让 Registry 不只是“存值”，而是“存值 + 存上下文 + 存可信度”。
+
+## FMT 共享模型
+
+FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而不是继续挂在插件目录内部。这样做有两个目的：
+
+- `session.fmt`、blind executor、后续 planner / writer 可以共享同一组类型，而不是各自维护私有 dataclass
+- 模型层职责更清晰：`plugins/fmt` 负责 service / orchestration，`core/models` 负责稳定数据形状
+
+当前这组模型包括：
+
+- `FmtTargetRef`：描述规范化后的目标地址引用，保留原始输入、解析地址、符号来源与元数据
+- `FmtValueRef`：描述规范化后的写入值引用，支持字面值或符号值
+- `FmtOffset`：描述最终确认后的 offset fact；确认后的值应写回 `fmt.offset`
+- `FmtOffsetProbeMode`：描述 offset 探测模式，当前支持 `sequential` 与 `positional_window`
+- `FmtOffsetProbeResult`：描述一次 offset 探测 artifact，包含 `method`、`matched_token`、`raw_output`、`tokens`、`window_start/window_end`、`sep`、`confidence`
+- `FmtLeak`：描述一次 fmt 读取结果；默认更接近 observation，而不是 fact
+- `FmtWriteRequest`：描述用户层原始写入请求
+- `FmtWriteAtom`：描述最小独立写单元，新增了 `end_address` 便于 payload/executor 做区间判断
+- `FmtWriteTask`：描述一个可独立执行的任务，新增了 `total_atoms`
+- `FmtWritePlan`：描述 service 输出的完整计划，额外暴露 `total_atoms`、`total_tasks` 与 `is_blind_safe`
+- `FmtRenderStep`：描述单个 atom 在 renderer 阶段的具体决策，包括 padding、arg index、specifier 与计数器推进
+- `RenderedFmtTask`：描述 renderer 产出的纯字节任务，包含最终 payload、layout、初始/最终计数器
+
+这组 FMT DTO 现在统一采用 `slots=True, frozen=True`。语义上它们是“可缓存、可对比、可入库”的 IR，而不是 service 内部可随手改写的状态对象。为避免出现“dataclass 冻结了但 metadata 还能被偷偷改”的假不可变状态，`metadata` 也会在构造时被冻结。
+
+配套枚举：
+
+- `FmtWriteStrategy`
+- `FmtReadMode`
+- `FmtTaskPolicy`
+- `FmtLayoutPolicy`
+
+以及基础别名：
+
+- `AddressLike`
+- `ValueLike`
+- `FmtEndian`
 
 ## Libc Catalog 模型
 

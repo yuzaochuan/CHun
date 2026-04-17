@@ -161,7 +161,7 @@ class BlindFmtTool:
                     )
                     if self.registry is not None:
                         self.registry.record_fact(
-                            "fmt.input_offset",
+                            "fmt.offset",
                             index,
                             kind=FactKind.OFFSET,
                             domain=RecordDomain.FMT,
@@ -213,7 +213,7 @@ class BlindFmtTool:
 
         return results
 
-    def find_input_offset(self, marker: bytes = b"PwnTool", max_range: int = 30) -> int:
+    def find_offset(self, marker: bytes = b"PwnTool", max_range: int = 30) -> int:
         """通过 marker 回显定位输入在栈参数中的 offset。"""
         marker_text = marker.decode(errors="ignore")
         log.info(f"开始查找输入 offset，marker = {marker_text}")
@@ -231,7 +231,7 @@ class BlindFmtTool:
                 log.success(f"找到输入 offset = {index}")
                 if self.registry is not None:
                     self.registry.record_fact(
-                        "fmt.input_offset",
+                        "fmt.offset",
                         index,
                         kind=FactKind.OFFSET,
                         domain=RecordDomain.FMT,
@@ -245,6 +245,10 @@ class BlindFmtTool:
 
         log.warning("在给定范围内未找到输入 offset。")
         return -1
+
+    def find_input_offset(self, marker: bytes = b"PwnTool", max_range: int = 30) -> int:
+        """兼容旧名称，转发到 ``find_offset()``。"""
+        return self.find_offset(marker=marker, max_range=max_range)
 
     def close(self) -> None:
         """关闭当前 IO 连接（若存在）。"""

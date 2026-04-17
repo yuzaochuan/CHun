@@ -16,8 +16,8 @@ CHun 目前处于源码重构第三轮收口阶段。顶层入口已经固定为
 - 已实现：`TargetSpec` / `TransportSpec` / `CHunSession`
 - 已实现：`PwntoolsTubeTransport`、`HttpxTransport`、`WebSocketTransport`、`BlindReconnectTransport`
 - 已实现：`EvidenceRegistry`、`session.rec`、`session.infer`
-- 已实现：`session.dbg`、`session.gdb_mi`、`session.resolve`、`session.crash`
-- 刻意未做：fmt/heap/template 主体与 pwngdb/pwndbg 深整合
+- 已实现：`session.dbg`、`session.gdb_mi`、`session.resolve`、`session.crash`、`session.fmt`
+- 刻意未做：fmt executor 细节、heap/template 主体与 pwngdb/pwndbg 深整合
 
 ## 文档导航
 

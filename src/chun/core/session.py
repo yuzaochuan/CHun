@@ -11,6 +11,7 @@ from .analysis import CorefileAnalyzer
 from .catalog import LibcCatalogService
 from .inference import InferenceService
 from .models import ContextKind, RecordDomain, TargetSpec, TransportSpec
+from ..plugins.fmt import FmtService
 from .registry import EvidenceRegistry
 from .resolve import ResolveService
 
@@ -23,6 +24,7 @@ class CHunSession:
     - `target`：目标描述
     - `transport_spec`：transport 配置
     - `transport`：实际 transport 实例
+    - `elf` / `libc_elf`：当前运行时绑定的二进制对象
     - `registry` / `rec`：统一事实层入口
     - `infer`：最小 inference 服务
     - `dbg` / `gdb_mi`：调试桥接入口
@@ -35,11 +37,14 @@ class CHunSession:
     transport: BaseTransport
     registry: EvidenceRegistry = field(default_factory=EvidenceRegistry)
     libc_catalog: LibcCatalogService = field(default_factory=LibcCatalogService)
+    elf: object | None = field(init=False, default=None)
+    libc_elf: object | None = field(init=False, default=None)
     infer: InferenceService = field(init=False)
     dbg: PwntoolsGdbBridge = field(init=False)
     gdb_mi: GdbMiBridge = field(init=False)
     resolve: ResolveService = field(init=False)
     crash: CorefileAnalyzer = field(init=False)
+    fmt: FmtService = field(init=False)
 
     def __post_init__(self) -> None:
         self.infer = InferenceService(self.registry, libc_catalog=self.libc_catalog)
@@ -47,6 +52,7 @@ class CHunSession:
         self.gdb_mi = GdbMiBridge(self.registry, self.target)
         self.resolve = ResolveService(self.registry, self.infer, catalog_service=self.libc_catalog)
         self.crash = CorefileAnalyzer(self.registry)
+        self.fmt = FmtService(self)
         self._seed_context()
 
     def _seed_context(self) -> None:
@@ -113,6 +119,40 @@ class CHunSession:
         self.transport.reconnect()
         self._sync_transport_context()
 
+    def bind_binaries(
+        self,
+        *,
+        elf: object | None = None,
+        libc_elf: object | None = None,
+        source: str = "session",
+    ) -> None:
+        """把运行时 ELF/libc 绑定到 session，并同步规范化 context。"""
+        if elf is not None:
+            self.elf = elf
+        if libc_elf is not None:
+            self.libc_elf = libc_elf
+
+        self.resolve.bind_defaults(elf=self.elf, libc_elf=self.libc_elf)
+
+        if self.elf is not None:
+            self._sync_binary_context(
+                prefix="binary",
+                binary=self.elf,
+                kind=ContextKind.TARGET,
+                domain=RecordDomain.ELF,
+                source=source,
+            )
+            self._sync_arch_context(self.elf, source=source)
+
+        if self.libc_elf is not None:
+            self._sync_binary_context(
+                prefix="libc",
+                binary=self.libc_elf,
+                kind=ContextKind.LIBC,
+                domain=RecordDomain.LIBC,
+                source=source,
+            )
+
     @property
     def rec(self) -> EvidenceRegistry:
         """`registry` 的语义化短别名。"""
@@ -136,6 +176,90 @@ class CHunSession:
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
         self.close()
+
+    def _sync_binary_context(
+        self,
+        *,
+        prefix: str,
+        binary: object,
+        kind: ContextKind,
+        domain: RecordDomain,
+        source: str,
+    ) -> None:
+        path = getattr(binary, "path", None)
+        if isinstance(path, str) and path:
+            self.registry.set_context(
+                f"{prefix}.path",
+                path,
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+        arch_name = getattr(binary, "arch", None)
+        if arch_name:
+            self.registry.set_context(
+                f"{prefix}.arch",
+                str(arch_name),
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+        bits = getattr(binary, "bits", None)
+        if bits is not None:
+            self.registry.set_context(
+                f"{prefix}.bits",
+                int(bits),
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+    def _sync_arch_context(self, binary: object, *, source: str) -> None:
+        bits = getattr(binary, "bits", None)
+        if bits is not None:
+            bits_value = int(bits)
+            self.registry.set_context(
+                "arch.bits",
+                bits_value,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
+                source=source,
+            )
+            self.registry.set_context(
+                "arch.pointer_size",
+                bits_value // 8,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
+                source=source,
+            )
+
+        endian = self._binary_endian(binary)
+        if endian is not None:
+            self.registry.set_context(
+                "arch.endian",
+                endian,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
+                source=source,
+            )
+
+    @staticmethod
+    def _binary_endian(binary: object) -> str | None:
+        if hasattr(binary, "little_endian"):
+            return "little" if bool(getattr(binary, "little_endian", True)) else "big"
+        endianness = getattr(binary, "endianness", None)
+        if isinstance(endianness, str) and endianness:
+            normalized = endianness.lower()
+            if normalized in {"little", "big"}:
+                return normalized
+        endian = getattr(binary, "endian", None)
+        if isinstance(endian, str) and endian:
+            normalized = endian.lower()
+            if normalized in {"little", "big"}:
+                return normalized
+        return None
 
 
 __all__ = ["CHunSession"]

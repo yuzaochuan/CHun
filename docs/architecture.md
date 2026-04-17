@@ -26,6 +26,16 @@
 - `src/chun/core/models`
   - `TargetSpec`
   - `TransportSpec`
+  - `FmtTargetRef`
+  - `FmtValueRef`
+  - `FmtOffset`
+  - `FmtOffsetProbeMode`
+  - `FmtOffsetProbeResult`
+  - `FmtLeak`
+  - `FmtWriteRequest`
+  - `FmtWriteAtom`
+  - `FmtWriteTask`
+  - `FmtWritePlan`
   - `LibcLeakConstraint`
   - `LibcCandidate`
   - `LibcSearchResult`
@@ -100,6 +110,7 @@
 - `session.gdb_mi`
 - `session.resolve`
 - `session.crash`
+- `session.fmt`
 - `session.libc_catalog`
 
 本轮收口后，面向后续插件开发的公开入口已经固定在这组字段上；下一阶段应优先复用这些入口，而不是继续新增临时 facade。

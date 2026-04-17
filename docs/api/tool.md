@@ -113,7 +113,7 @@ t.gdb("b *main\nc")
 - `REMOTE GDB` 时只 warning，不会 attach
 - `t.target` 是当前脚本入口使用的 `TargetSpec` 配置对象
 - `t.start()` 返回 `t` 自身，因此 `t = CHun.script(...).start()` 与 `t = CHun.script(...); t.start()` 都可用
-- `t.start()` 会把脚本态已加载的 `t.elf` / `t.libc` 绑定为 `t.resolve` 的默认解析对象
+- `t.start()` 会调用 `session.bind_binaries()`，把脚本态已加载的 `t.elf` / `t.libc` 绑定到 `session.elf` / `session.libc_elf`，并将 `binary.path`、`arch.bits`、`arch.endian`、`arch.pointer_size`、`libc.path` 等规范化上下文写入 `registry context`
 - `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 会显式转发到当前 session
 - `t.resolve.libc_base_from_elf_symbol(..., symbol="puts")` 在脚本态可直接复用默认 `t.libc`，无需重复传 `libc_elf=t.libc`
 - `t.resolve.pie_base_from_elf_symbol(..., symbol="main")` 在脚本态可直接复用默认 `t.elf`
@@ -145,6 +145,7 @@ t.gdb("b *main\nc")
 - `session.open()`：显式打开 transport
 - `session.close()`：关闭 transport
 - `session.reconnect()`：重建 transport
+- `session.bind_binaries(elf=..., libc_elf=...)`：绑定运行时二进制对象，并同步 `session` 字段与规范化 `registry context`
 - `session.io`：首次访问时自动打开 transport
 - pwntools 场景下可直接使用 `session.io.sendlineafter()` / `session.io.interactive()`
 - pwntools 场景下，未显式列出的常用 `tube` 方法也会透传，例如 `session.io.recvline()`
@@ -154,6 +155,7 @@ t.gdb("b *main\nc")
 - `session.gdb_mi`：结构化 GDB/MI 命令
 - `session.resolve`：MemLeak / DynELF / symbol 解析
 - `session.crash`：core dump 分析
+- `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、生成并持久化 `FmtWritePlan`、执行 task 级渲染与 blind-safe task 拆分；offset probe 会把原始响应写 observation、结构化结果写 artifact、最终 offset 写 fact；内置 planner 默认支持按 `BYTE/SHORT/INT/PTR` 做 little-endian 数值切片
 
 ## 示例
 
@@ -169,7 +171,18 @@ api = CHun.http("http://127.0.0.1:8000")
 print(api.io.request("GET", "/health"))
 ```
 
+```python
+plan = p.fmt.plan_writes(
+    {"printf@got": "system"},
+    artifact_name="fmt.plan.printf2system",
+)
+print(plan.total_atoms, plan.total_tasks)
+
+rendered = p.fmt.render_plan(plan, offset=6)
+print(rendered[0].payload)
+```
+
 ## 本阶段边界
 
-- 已完成：session/runtime 入口、registry 挂接、最小 inference、debug/resolve/crash bridge
-- 未完成：完整 `fmt / heap / tpl` 子系统，以及 pwngdb/pwndbg 深集成
+- 已完成：session/runtime 入口、registry 挂接、最小 inference、debug/resolve/crash bridge、fmt 计划层
+- 未完成：fmt payload/executor 细节、heap / tpl 子系统，以及 pwngdb/pwndbg 深集成

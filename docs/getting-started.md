@@ -59,7 +59,7 @@ print(io.recvuntil(b"\n"))
 - `t.elf = context.binary`
 - `t.libc`，若未显式传入则尝试从 `t.elf.libc` 自动获取
 - `t.start()` 返回 `t` 自身，因此既支持分步写法，也支持 `t = CHun.script(...).start()`
-- `t.start()` 后会把 `t.elf` / `t.libc` 绑定为 `t.resolve` 的默认解析对象
+- `t.start()` 后会通过 `session.bind_binaries()` 把 `t.elf` / `t.libc` 绑定到当前 session，并把 `binary.path`、`arch.bits`、`arch.endian`、`arch.pointer_size`、`libc.path` 等规范化信息写进 registry context
 - `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力的显式入口
 - `t.sla()` / `t.rl()` / `t.ia()` 等高频交互方法与 alias
 - 低频 tube 方法可继续通过 fallback 使用，例如 `t.clean()`
@@ -160,11 +160,18 @@ session.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
 blind = CHun.blind(lambda: object())
 # blind.resolve.symbol_via_dynelf("system", leak_primitive=leak_func, pointer=0x601018)
 
+# fmt planning
+# session.resolve.bind_defaults(elf=elf, libc_elf=libc)
+# session.rec.record_fact("libc.base", 0x7F1234500000)
+# plan = session.fmt.plan_writes({"printf@got": "system"})
+# print(plan.total_atoms, plan.total_tasks)
+# rendered = session.fmt.render_plan(plan, offset=6)
+
 # corefile -> crash facts
 # session.crash.analyze("/tmp/core")
 ```
 
 ## 当前阶段边界
 
-- 已落地：session 入口、transport、registry、最小 inference、debug/resolve/crash bridge
-- 暂未实现：fmt/heap/template 主体与 pwngdb/pwndbg 深集成
+- 已落地：session 入口、transport、registry、最小 inference、debug/resolve/crash bridge、fmt 计划/记录层
+- 暂未实现：fmt payload/executor 细节、heap/template 主体与 pwngdb/pwndbg 深集成

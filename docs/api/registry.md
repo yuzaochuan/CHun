@@ -16,7 +16,7 @@
   - 例如 symbol leak、HTTP 响应、blind 探测结果
 - `facts`
   - 已确认或经过归纳的稳定结论
-  - 例如 `libc.base`、`fmt.input_offset`
+  - 例如 `libc.base`、`fmt.offset`
 - `artifacts`
   - 可复用产物
   - 例如 payload、脚本、模板渲染结果、libc catalog 检索结果

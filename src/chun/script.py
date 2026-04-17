@@ -15,6 +15,7 @@ from .core.inference import InferenceService
 from .core.models import RecordDomain, TargetSpec
 from .core.registry import EvidenceRegistry
 from .core.resolve import ResolveService
+from .plugins.fmt import FmtService
 from .transports.pwntools_tube import PwntoolsTubeTransport
 
 if TYPE_CHECKING:
@@ -142,7 +143,7 @@ class ScriptEntry:
         """启动并缓存当前脚本对应的 `CHunSession`，并返回脚本入口自身。"""
         if self._session is None:
             self._session = self._build_session()
-            self._session.resolve.bind_defaults(elf=self.elf, libc_elf=self.libc)
+            self._session.bind_binaries(elf=self.elf, libc_elf=self.libc, source="script")
         return self
 
     def gdb(self, script: str = "") -> object | None:
@@ -279,6 +280,11 @@ class ScriptEntry:
     def crash(self) -> CorefileAnalyzer:
         """访问 session 的 core dump / crash 分析入口。"""
         return self.as_session.crash
+
+    @property
+    def fmt(self) -> FmtService:
+        """访问 session 的 fmt 服务。"""
+        return self.as_session.fmt
 
     def send(self, data: bytes) -> None:
         """转发到当前 `io.send()`。"""

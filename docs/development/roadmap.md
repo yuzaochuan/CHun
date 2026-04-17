@@ -8,7 +8,7 @@
 
 ## 中期
 
-- fmt 专项模块：把占位 `plugins/fmt.py` 落地为可复用能力
+- fmt 执行层：在已落地的 `session.fmt` 计划层之上补齐 payload builder / executor
 - flow 层：抽象多阶段利用流程的状态推进
 - heap 模块：补齐堆题常见分析与记录接口
 
