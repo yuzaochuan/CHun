@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.7z
 
 # Distribution / packaging
 .Python
@@ -217,6 +218,16 @@ cython_debug/
 .cursorindexingignore
 
 # Marimo
+data/libc/libc.db
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# CHun Libc Catalog - Data & Runtime
+data/libc/raw/
+data/libc/community/*
+data/libc/*.db-journal
+data/libc/*.db-wal
+# 91个核心libc偏移数据库，文件大小40kb 
+!data/libc/libc.db
+!data/libc/raw/CATALOG_MAINTENANCE.md

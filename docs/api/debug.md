@@ -38,6 +38,8 @@
 
 - `memleak(leak_primitive, ...)`
 - `symbol_via_dynelf(symbol, ..., pointer=...)`
+- `symbol(name)`
+- `bind_defaults(elf=..., libc_elf=...)`
 - `libc_base_from_elf_symbol(observation_name, libc_elf=..., symbol=...)`
 - `pie_base_from_elf_symbol(observation_name, elf=..., symbol=...)`
 
@@ -49,6 +51,18 @@
 - session.registry
 
 收敛到同一条工作流里。
+
+如果当前会话已经显式绑定了默认 `elf` / `libc_elf`，后续 `libc_base_from_elf_symbol()` 与 `pie_base_from_elf_symbol()` 可省略对应对象参数。
+`CHun.script().start()` 会自动把脚本态的 `t.elf` / `t.libc` 绑定到 `t.resolve`。
+
+`symbol(name)` 走的是另一条离线链路：
+
+- 从 registry 读取 `libc.base`
+- 从 `libc.version` 的 metadata 提取 `libc_id`
+- 通过本地 `LibcCatalogService` 查询符号 offset
+- 返回绝对地址
+
+它支持服务层归一化，因此 `puts@got`、`write_plt`、`str_bin_sh` 这类常见 EXP 写法可以直接使用。
 
 ## `session.crash`
 
@@ -76,6 +90,11 @@ result = session.resolve.libc_base_from_elf_symbol(
     libc_elf=libc,
     symbol="puts",
 )
+
+# script 场景：
+# t = CHun.script("./challenge", libc="./libc.so.6")
+# t.start()
+# result = t.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
 ```
 
 ### blind leak -> DynELF
@@ -88,6 +107,21 @@ resolved = session.resolve.symbol_via_dynelf(
     lib="libc",
 )
 ```
+
+### 离线 libc 符号解析
+
+```python
+result = session.infer.search_libc(require_all=False)
+result = session.infer.search_libc(
+    require_all=False,
+    index=0,
+)
+
+system_addr = session.resolve.symbol("system")
+bin_sh_addr = session.resolve.symbol("str_bin_sh")
+```
+
+如果候选唯一，上面的 `index` 可以省略；`search_libc()` 会直接写回 `libc.version` 和 `libc.base`。
 
 ### core dump analysis
 

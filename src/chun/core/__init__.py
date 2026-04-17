@@ -2,6 +2,7 @@
 
 from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
 from .analysis import CorefileAnalyzer
+from .catalog import LibcCatalogService
 from .errors import (
     BridgeError,
     CHunError,
@@ -65,6 +66,7 @@ __all__ = [
     "InferenceError",
     "InferenceInputError",
     "InferenceService",
+    "LibcCatalogService",
     "MissingDependencyError",
     "Observation",
     "ObservationKind",

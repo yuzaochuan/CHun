@@ -46,16 +46,21 @@ def _build_session() -> CHunSession:
 
 def test_pwntools_gdb_bridge_attach_and_execute_write_back_to_registry() -> None:
     session = _build_session()
+    controller = FakeGdbController()
 
-    def fake_attach(target: object, gdbscript: str = "", exe: str | None = None, api: bool = False) -> object:
+    def fake_attach(
+        target: object, gdbscript: str = "", exe: str | None = None, api: bool = False
+    ) -> object:
         assert target is session.transport.raw
         assert exe == "./challenge"
         assert "b *main" in gdbscript
         if api:
-            return (4242, FakeGdbController())
+            return (4242, controller)
         return 4242
 
-    session.dbg = PwntoolsGdbBridge(session.registry, session.target, lambda: session.raw, attach_fn=fake_attach)
+    session.dbg = PwntoolsGdbBridge(
+        session.registry, session.target, lambda: session.raw, attach_fn=fake_attach
+    )
     session.transport.open()
 
     result = session.dbg.attach(script="b *main\nc", api=True)
@@ -69,6 +74,16 @@ def test_pwntools_gdb_bridge_attach_and_execute_write_back_to_registry() -> None
     assert maps[0]["start"] == 0x400000
     assert session.registry.get_context("debugger.attach.pid").value == 4242
     assert session.registry.get_artifact("debugger.gdbscript") is not None
+
+
+def test_pwntools_gdb_bridge_bind_runtime_updates_controller_context() -> None:
+    session = _build_session()
+    controller = FakeGdbController()
+
+    session.dbg.bind_runtime(controller=controller, pid=5150)
+
+    assert session.registry.get_context("debugger.attached").value is True
+    assert session.registry.get_context("debugger.attach.pid").value == 5150
 
 
 class FakeStdout:
@@ -103,7 +118,9 @@ class FakeMiProcess:
         self.terminated = True
 
 
-def test_gdb_mi_bridge_returns_structured_results_separately_from_interactive_bridge() -> None:
+def test_gdb_mi_bridge_returns_structured_results_separately_from_interactive_bridge() -> (
+    None
+):
     session = _build_session()
 
     def fake_process_factory(*_args: object, **_kwargs: object) -> FakeMiProcess:
@@ -116,7 +133,9 @@ def test_gdb_mi_bridge_returns_structured_results_separately_from_interactive_br
             ]
         )
 
-    session.gdb_mi = GdbMiBridge(session.registry, session.target, process_factory=fake_process_factory)
+    session.gdb_mi = GdbMiBridge(
+        session.registry, session.target, process_factory=fake_process_factory
+    )
     result = session.gdb_mi.execute("-data-list-register-values x")
 
     assert result.result_class == "done"
