@@ -33,7 +33,7 @@ def test_ret2libc_workflow_uses_session_registry_inference_and_pwntools_style_sy
     assert result.stored_fact is fact
 
 
-def test_ret2libc_workflow_can_use_bound_default_libc_elf() -> None:
+def test_ret2libc_workflow_can_use_session_bound_libc_elf() -> None:
     session = CHun.process("./challenge")
     expected_base = 0x7F1234500000
 
@@ -41,7 +41,7 @@ def test_ret2libc_workflow_can_use_bound_default_libc_elf() -> None:
     class DummyLibc:
         sym: dict[str, int]
 
-    session.resolve.bind_defaults(libc_elf=DummyLibc(sym={"puts": 0x80000}))
+    session.bind_binaries(libc_elf=DummyLibc(sym={"puts": 0x80000}))
     session.rec.record_symbol_leak(
         "puts",
         expected_base + 0x80000,

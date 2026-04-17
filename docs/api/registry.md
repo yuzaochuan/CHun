@@ -61,6 +61,18 @@
 - `tag`
 - `source`
 
+如果你希望在业务侧拿到“不可空且值类型明确”的结果，而不是自己手写 `None` 判断和 `isinstance(...)`，可以使用严格读取 helper：
+
+- `require_observation(name)`
+- `require_fact(name)`
+- `require_artifact(name)`
+- `require_context(name)`
+- `require_int_observation(name)`
+- `require_int_fact(name)`
+- `require_str_fact(name)`
+
+这些 helper 在记录缺失时抛 `KeyError`，在值类型不匹配时抛 `TypeError`，适合脚本层和类型检查较严格的调用点。
+
 ## 覆盖与更新规则
 
 所有写接口都支持 `overwrite=`。
@@ -114,7 +126,7 @@
 1. 只扫描 `domain=LIBC` 且 `kind=SYMBOL_LEAK` 的 observation
 2. 跳过非整数地址
 3. 同名 symbol 出现多次时，优先采用更高 `confidence` 的记录
-4. 支持 `single_arch=True`：若调用方未显式传 `arch`，则尽量从当前上下文推断单一架构收窄候选
+4. 支持 `single_arch=True`：若调用方未显式传 `arch`，则优先从 `session.elf`，否则从 registry context 中的规范化标量（例如 `binary.arch`，不足时回退到 `binary.bits` / `arch.bits`）推断单一架构收窄候选
 5. 支持 `index=...`，用于多候选场景下按排名静默确认目标版本
 6. 若没有可用 leak，则抛 `InferenceInputError`
 
@@ -142,6 +154,13 @@
 
 - `t.libc_base`
 - `t.libc_version`
+
+会话态也提供同名快捷属性：
+
+- `session.libc_base`
+- `session.libc_version`
+
+另外，registry context 只用于保存环境标量，不保存运行时 ELF / libc ELF 富对象；后者应始终挂在 `session.elf` / `session.libc_elf`。
 
 ## 当前推荐入口
 

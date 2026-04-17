@@ -109,3 +109,26 @@ def test_record_symbol_leak_helper_is_explicit_about_domain() -> None:
     assert record.domain == RecordDomain.LIBC
     assert record.source == "got"
     assert "leak" in record.tags
+
+
+def test_registry_require_helpers_return_typed_values() -> None:
+    registry = EvidenceRegistry()
+    registry.record_observation("puts", 0x401000, domain=RecordDomain.LIBC)
+    registry.record_fact("libc.base", 0x7F0000000000, domain=RecordDomain.LIBC)
+    registry.record_fact("libc.version", "glibc-test", domain=RecordDomain.LIBC)
+
+    assert registry.require_observation("puts").name == "puts"
+    assert registry.require_int_observation("puts") == 0x401000
+    assert registry.require_int_fact("libc.base") == 0x7F0000000000
+    assert registry.require_str_fact("libc.version") == "glibc-test"
+
+
+def test_registry_require_helpers_raise_for_missing_or_wrong_type() -> None:
+    registry = EvidenceRegistry()
+    registry.record_observation("puts", b"not-an-int", domain=RecordDomain.LIBC)
+
+    with pytest.raises(KeyError, match="observation 不存在"):
+        registry.require_observation("missing")
+
+    with pytest.raises(TypeError, match="不是 int"):
+        registry.require_int_observation("puts")

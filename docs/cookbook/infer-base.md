@@ -93,7 +93,7 @@ print(session.registry.get_fact("libc.version"))
 print(session.registry.get_fact("libc.base"))
 ```
 
-`search_libc()` 只会读取 `RecordDomain.LIBC + ObservationKind.SYMBOL_LEAK` 的整数 observation；同名 symbol 若出现多次，会优先采用置信度更高的记录。默认 `single_arch=True`，若没有显式传 `arch`，系统会尽量从当前上下文推断单架构来收窄候选。若版本被唯一确认，或显式传入 `index`，它会继续自动推导并写回 `libc.base`。
+`search_libc()` 只会读取 `RecordDomain.LIBC + ObservationKind.SYMBOL_LEAK` 的整数 observation；同名 symbol 若出现多次，会优先采用置信度更高的记录。默认 `single_arch=True`，若没有显式传 `arch`，系统会优先从 `session.elf`，否则从 registry context 中的规范化标量（如 `binary.arch`，不足时回退到 `binary.bits` / `arch.bits`）推断单架构来收窄候选。若版本被唯一确认，或显式传入 `index`，它会继续自动推导并写回 `libc.base`。
 
 如果你想临时放开全架构搜索，也可以显式关闭这个收窄逻辑：
 

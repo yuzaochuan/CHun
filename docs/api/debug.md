@@ -39,7 +39,6 @@
 - `memleak(leak_primitive, ...)`
 - `symbol_via_dynelf(symbol, ..., pointer=...)`
 - `symbol(name)`
-- `bind_defaults(elf=..., libc_elf=...)`
 - `libc_base_from_elf_symbol(observation_name, libc_elf=..., symbol=...)`
 - `pie_base_from_elf_symbol(observation_name, elf=..., symbol=...)`
 
@@ -52,8 +51,12 @@
 
 收敛到同一条工作流里。
 
-如果当前会话已经显式绑定了默认 `elf` / `libc_elf`，后续 `libc_base_from_elf_symbol()` 与 `pie_base_from_elf_symbol()` 可省略对应对象参数。
-`CHun.script().start()` 会自动把脚本态的 `t.elf` / `t.libc` 绑定到 `t.resolve`。
+如果当前会话已经显式绑定了默认 `elf` / `libc_elf`，后续 `libc_base_from_elf_symbol()` 与 `pie_base_from_elf_symbol()` 可省略对应对象参数。标准绑定入口是 `session.bind_binaries(elf=..., libc_elf=...)`；`CHun.script().start()` 也会走同一条 session 绑定链。
+
+这里要区分两类状态：
+
+- 运行时富对象：只挂在 `session.elf` / `session.libc_elf`
+- registry context：只保存规范化标量，例如 `binary.path` / `binary.arch` / `arch.bits` / `libc.path`
 
 `symbol(name)` 走的是另一条离线链路：
 

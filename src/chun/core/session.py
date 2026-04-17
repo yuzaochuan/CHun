@@ -6,12 +6,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
+from ..plugins.fmt import FmtService
 from ..transports.base import BaseTransport
 from .analysis import CorefileAnalyzer
 from .catalog import LibcCatalogService
 from .inference import InferenceService
 from .models import ContextKind, RecordDomain, TargetSpec, TransportSpec
-from ..plugins.fmt import FmtService
 from .registry import EvidenceRegistry
 from .resolve import ResolveService
 
@@ -37,8 +37,8 @@ class CHunSession:
     transport: BaseTransport
     registry: EvidenceRegistry = field(default_factory=EvidenceRegistry)
     libc_catalog: LibcCatalogService = field(default_factory=LibcCatalogService)
-    elf: object | None = field(init=False, default=None)
-    libc_elf: object | None = field(init=False, default=None)
+    elf: object | None = field(default=None, init=False, repr=False)
+    libc_elf: object | None = field(default=None, init=False, repr=False)
     infer: InferenceService = field(init=False)
     dbg: PwntoolsGdbBridge = field(init=False)
     gdb_mi: GdbMiBridge = field(init=False)
@@ -47,10 +47,17 @@ class CHunSession:
     fmt: FmtService = field(init=False)
 
     def __post_init__(self) -> None:
-        self.infer = InferenceService(self.registry, libc_catalog=self.libc_catalog)
+        self.infer = InferenceService(
+            self.registry, libc_catalog=self.libc_catalog, session=self
+        )
         self.dbg = PwntoolsGdbBridge(self.registry, self.target, lambda: self.raw)
         self.gdb_mi = GdbMiBridge(self.registry, self.target)
-        self.resolve = ResolveService(self.registry, self.infer, catalog_service=self.libc_catalog)
+        self.resolve = ResolveService(
+            self.registry,
+            self.infer,
+            catalog_service=self.libc_catalog,
+            session=self,
+        )
         self.crash = CorefileAnalyzer(self.registry)
         self.fmt = FmtService(self)
         self._seed_context()
@@ -101,6 +108,78 @@ class CHunSession:
                 type(raw).__name__,
                 kind=ContextKind.TRANSPORT,
                 domain=RecordDomain.TRANSPORT,
+            )
+
+    def bind_binaries(
+        self,
+        *,
+        elf: object | None = None,
+        libc_elf: object | None = None,
+    ) -> "CHunSession":
+        """绑定当前会话使用的 ELF / libc ELF 富对象，并同步标量上下文。"""
+        if elf is not None:
+            self.elf = elf
+            self._sync_binary_context("binary", elf, kind=ContextKind.ENVIRONMENT)
+            self._sync_arch_context(elf)
+        if libc_elf is not None:
+            self.libc_elf = libc_elf
+            self._sync_binary_context("libc", libc_elf, kind=ContextKind.LIBC)
+        return self
+
+    def _sync_binary_context(
+        self, prefix: str, binary: object, *, kind: ContextKind
+    ) -> None:
+        path = getattr(binary, "path", None)
+        arch = getattr(binary, "arch", None)
+        bits = getattr(binary, "bits", None)
+
+        if isinstance(path, str) and path:
+            self.registry.set_context(
+                f"{prefix}.path",
+                path,
+                kind=kind,
+                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
+            )
+        if isinstance(arch, str) and arch:
+            self.registry.set_context(
+                f"{prefix}.arch",
+                arch,
+                kind=kind,
+                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
+            )
+        if isinstance(bits, int):
+            self.registry.set_context(
+                f"{prefix}.bits",
+                bits,
+                kind=kind,
+                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
+            )
+
+    def _sync_arch_context(self, binary: object) -> None:
+        bits = getattr(binary, "bits", None)
+        endian = getattr(binary, "endian", None)
+        pointer_size = getattr(binary, "bytes", None)
+
+        if isinstance(bits, int):
+            self.registry.set_context(
+                "arch.bits",
+                bits,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
+            )
+        if isinstance(endian, str) and endian:
+            self.registry.set_context(
+                "arch.endian",
+                endian,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
+            )
+        if isinstance(pointer_size, int):
+            self.registry.set_context(
+                "arch.pointer_size",
+                pointer_size,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
             )
 
     def open(self) -> "CHunSession":
@@ -170,6 +249,28 @@ class CHunSession:
     def raw(self) -> Any:
         """返回底层 transport 的原始对象。"""
         return self.io.raw
+
+    @property
+    def libc_base(self) -> int:
+        """返回当前 session 中已确认的 libc base。"""
+        try:
+            return self.registry.require_int_fact("libc.base")
+        except KeyError as exc:
+            raise RuntimeError(
+                "libc.base 尚未推导，可能是多候选情况，请明确指定或编写爆破逻辑。"
+            ) from exc
+        except TypeError as exc:
+            raise RuntimeError("libc.base 已存在，但其值不是整数。") from exc
+
+    @property
+    def libc_version(self) -> str:
+        """返回当前 session 中已确认的 libc 版本名。"""
+        try:
+            return self.registry.require_str_fact("libc.version")
+        except KeyError as exc:
+            raise RuntimeError("libc.version 尚未确认。") from exc
+        except TypeError as exc:
+            raise RuntimeError("libc.version 已存在，但其值不是字符串。") from exc
 
     def __enter__(self) -> "CHunSession":
         return self.open()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Mapping, Protocol, SupportsInt
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol, SupportsInt
 
 from ...bridges.pwntools import MemLeakAdapter
 from ..catalog import LibcCatalogService
@@ -11,6 +11,9 @@ from ..inference import InferenceService
 from ..models import BaseInferenceResult, RecordDomain, ResolvedSymbolResult
 from ..registry import EvidenceRegistry
 from .dynelf import DynELFResolver
+
+if TYPE_CHECKING:
+    from ..session import CHunSession
 
 
 class SupportsSym(Protocol):
@@ -27,27 +30,23 @@ class ResolveService:
         registry: EvidenceRegistry,
         infer: InferenceService,
         *,
+        session: "CHunSession | None" = None,
         catalog_service: LibcCatalogService | None = None,
         memleak_adapter_cls: type[MemLeakAdapter] = MemLeakAdapter,
         dynelf_resolver_cls: type[DynELFResolver] = DynELFResolver,
     ) -> None:
         self.registry = registry
         self.infer = infer
+        self.session = session
         self.catalog_service = catalog_service if catalog_service is not None else infer.libc_catalog
         self.memleak_adapter_cls = memleak_adapter_cls
         self.dynelf_resolver = dynelf_resolver_cls(registry, adapter_cls=memleak_adapter_cls)
-        self.default_elf: object | None = None
-        self.default_libc_elf: object | None = None
 
-    def bind_defaults(
-        self,
-        *,
-        elf: object | None = None,
-        libc_elf: object | None = None,
-    ) -> None:
-        """绑定当前会话默认使用的 ELF / libc ELF 对象。"""
-        self.default_elf = elf
-        self.default_libc_elf = libc_elf
+    def _session_elf(self) -> object | None:
+        return None if self.session is None else self.session.elf
+
+    def _session_libc_elf(self) -> object | None:
+        return None if self.session is None else self.session.libc_elf
 
     def memleak(
         self,
@@ -104,14 +103,14 @@ class ResolveService:
         candidate = (
             libc_elf
             if libc_elf is not None
-            else self.default_libc_elf
-            if self.default_libc_elf is not None
             else elf
             if elf is not None
-            else self.default_elf
+            else self._session_libc_elf()
+            if self._session_libc_elf() is not None
+            else self._session_elf()
         )
         if candidate is None:
-            raise ResolverError("libc_elf 或 elf 至少需要提供一个。")
+            raise ResolverError("缺少可用的 libc_elf / elf，请显式传参或先绑定到 session。")
         if not hasattr(candidate, "sym"):
             raise ResolverError("libc_elf 需要提供 .sym 映射。")
         symbol_offset = int(candidate.sym[symbol])
@@ -129,9 +128,9 @@ class ResolveService:
         symbol: str,
         fact_name: str = "elf.base",
     ) -> BaseInferenceResult:
-        candidate = elf if elf is not None else self.default_elf
+        candidate = elf if elf is not None else self._session_elf()
         if candidate is None:
-            raise ResolverError("elf 至少需要提供一个。")
+            raise ResolverError("缺少可用的 elf，请显式传参或先绑定到 session。")
         if not hasattr(candidate, "sym"):
             raise ResolverError("elf 需要提供 .sym 映射。")
         symbol_offset = int(candidate.sym[symbol])

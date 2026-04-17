@@ -1,6 +1,7 @@
 """脚本模式 facade。"""
 
 from __future__ import annotations
+
 import sys
 import termios
 import tty
@@ -21,7 +22,7 @@ from .transports.pwntools_tube import PwntoolsTubeTransport
 if TYPE_CHECKING:
     from .core.session import CHunSession
 
-DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h", "-d")
+DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h")
 
 
 class ScriptEntry:
@@ -143,7 +144,7 @@ class ScriptEntry:
         """启动并缓存当前脚本对应的 `CHunSession`，并返回脚本入口自身。"""
         if self._session is None:
             self._session = self._build_session()
-            self._session.bind_binaries(elf=self.elf, libc_elf=self.libc, source="script")
+            self._session.bind_binaries(elf=self.elf, libc_elf=self.libc)
         return self
 
     def gdb(self, script: str = "") -> object | None:
@@ -152,7 +153,7 @@ class ScriptEntry:
             return None
 
         self.start()
-        session = self.as_session
+        session = self.session
         if session.target.kind != "process":
             log.warning("当前为 REMOTE 模式，跳过 GDB attach。")
             return None
@@ -164,7 +165,7 @@ class ScriptEntry:
             return self.start()
 
         self.start()
-        session = self.as_session
+        session = self.session
         if session.target.kind != "process":
             raise TransportConfigError("ScriptEntry.debug() 仅支持本地 process 目标。")
         if not isinstance(session.transport, PwntoolsTubeTransport):
@@ -212,7 +213,7 @@ class ScriptEntry:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
     @property
-    def as_session(self) -> "CHunSession":
+    def session(self) -> "CHunSession":
         """返回当前已启动的 session，用于访问完整框架能力。"""
         if self._session is None:
             raise RuntimeError("ScriptEntry 尚未启动，请先调用 start()。")
@@ -221,7 +222,7 @@ class ScriptEntry:
     @property
     def io(self) -> Any:
         """返回当前 session 的 `io` 入口，适合直接做 tube 交互。"""
-        return self.as_session.io
+        return self.session.io
 
     @property
     def target(self) -> TargetSpec:
@@ -241,45 +242,37 @@ class ScriptEntry:
     @property
     def libc_base(self) -> int:
         """返回当前 session 中已确认的 libc base。"""
-        fact = self.rec.get_fact("libc.base")
-        if fact is None or not isinstance(fact.value, int):
-            raise RuntimeError(
-                "libc.base 尚未推导，可能是多候选情况，请明确指定或编写爆破逻辑。"
-            )
-        return fact.value
+        return self.session.libc_base
 
     @property
     def libc_version(self) -> str:
         """返回当前 session 中已确认的 libc 版本名。"""
-        fact = self.rec.get_fact("libc.version")
-        if fact is None or not isinstance(fact.value, str):
-            raise RuntimeError("libc.version 尚未确认。")
-        return fact.value
+        return self.session.libc_version
 
     @property
     def rec(self) -> EvidenceRegistry:
         """访问 session 的事实记录入口，常用于记录 leak 和 context。"""
-        return self.as_session.rec
+        return self.session.rec
 
     @property
     def infer(self) -> InferenceService:
         """访问 session 的最小 inference 服务。"""
-        return self.as_session.infer
+        return self.session.infer
 
     @property
     def resolve(self) -> ResolveService:
         """访问 session 的解析服务，用于符号、DynELF 等推导。"""
-        return self.as_session.resolve
+        return self.session.resolve
 
     @property
     def dbg(self) -> PwntoolsGdbBridge:
         """访问 session 的交互式 GDB bridge。"""
-        return self.as_session.dbg
+        return self.session.dbg
 
     @property
     def crash(self) -> CorefileAnalyzer:
         """访问 session 的 core dump / crash 分析入口。"""
-        return self.as_session.crash
+        return self.session.crash
 
     @property
     def fmt(self) -> FmtService:
@@ -388,7 +381,9 @@ class ScriptEntry:
         if mode == "raw":
             pointer_width = int(getattr(self.elf, "bytes", 8))
             leak_bytes = payload[:pointer_width]
-            leak_val = int.from_bytes(leak_bytes.ljust(pointer_width, b"\x00"), "little")
+            leak_val = int.from_bytes(
+                leak_bytes.ljust(pointer_width, b"\x00"), "little"
+            )
         else:
             text = payload.decode().strip()
             if not text:
@@ -438,11 +433,11 @@ class ScriptEntry:
 
     def __enter__(self) -> "ScriptEntry":
         self.start()
-        self.as_session.open()
+        self.session.open()
         return self
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
-        self.as_session.close()
+        self.session.close()
 
     def __getattr__(self, name: str) -> Any:
         """将未显式声明的低频方法兜底转发到当前 `io`。"""
