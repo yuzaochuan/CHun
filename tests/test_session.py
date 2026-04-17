@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from chun import CHun, CHunSession
 from chun.core.inference import InferenceService
 from chun.core.models import FactKind, RecordDomain, TargetSpec, TransportSpec
@@ -27,6 +29,15 @@ class DummyTransport:
 
     def reconnect(self) -> None:
         self.calls.append("reconnect")
+
+
+@dataclass
+class DummyBinary:
+    path: str
+    arch: str
+    bits: int
+    bytes: int
+    endian: str
 
 
 def test_process_factory_builds_session_with_pwntools_transport() -> None:
@@ -103,3 +114,60 @@ def test_session_minimal_inference_loop_writes_fact_back_to_registry() -> None:
     assert fact.value == expected_base
     assert result.stored_fact is fact
     assert result.aligned_base == expected_base
+
+
+def test_session_exposes_libc_shortcuts() -> None:
+    session = CHun.process("./challenge")
+    session.rec.record_fact(
+        "libc.base",
+        0x7F0000000000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+    session.rec.record_fact(
+        "libc.version",
+        "glibc-test",
+        kind=FactKind.VERSION,
+        domain=RecordDomain.LIBC,
+    )
+
+    assert session.libc_base == 0x7F0000000000
+    assert session.libc_version == "glibc-test"
+
+
+def test_session_bind_binaries_keeps_objects_on_session_and_only_writes_scalar_context() -> None:
+    session = CHunSession(
+        target=TargetSpec(kind="process"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyTransport(),
+    )
+    elf = DummyBinary(
+        path="./challenge",
+        arch="amd64",
+        bits=64,
+        bytes=8,
+        endian="little",
+    )
+    libc_elf = DummyBinary(
+        path="./libc.so.6",
+        arch="amd64",
+        bits=64,
+        bytes=8,
+        endian="little",
+    )
+
+    session.bind_binaries(elf=elf, libc_elf=libc_elf)
+
+    assert session.elf is elf
+    assert session.libc_elf is libc_elf
+    assert session.rec.require_context("binary.path").value == "./challenge"
+    assert session.rec.require_context("binary.arch").value == "amd64"
+    assert session.rec.require_context("binary.bits").value == 64
+    assert session.rec.require_context("arch.bits").value == 64
+    assert session.rec.require_context("arch.endian").value == "little"
+    assert session.rec.require_context("arch.pointer_size").value == 8
+    assert session.rec.require_context("libc.path").value == "./libc.so.6"
+    assert session.rec.require_context("libc.arch").value == "amd64"
+    assert session.rec.require_context("libc.bits").value == 64
+    assert session.rec.get_context("resolve.default.elf") is None
+    assert session.rec.get_context("resolve.default.libc_elf") is None

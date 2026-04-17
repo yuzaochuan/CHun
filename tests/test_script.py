@@ -95,13 +95,16 @@ class DummySession:
     open_calls: int = 0
     close_calls: int = 0
     reconnect_calls: int = 0
+    bind_binaries_calls: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.target = type("Target", (), {"kind": self.kind})()
         self.rec = SimpleNamespace(name="rec")
         self.infer = SimpleNamespace(name="infer")
-        self.resolve = SimpleNamespace(name="resolve", bind_defaults=lambda **_: None)
+        self.resolve = SimpleNamespace(name="resolve")
         self.crash = SimpleNamespace(name="crash")
+        self.elf = None
+        self.libc_elf = None
 
     def open(self) -> DummySession:
         self.open_calls += 1
@@ -112,6 +115,26 @@ class DummySession:
 
     def reconnect(self) -> None:
         self.reconnect_calls += 1
+
+    def bind_binaries(self, *, elf: object | None = None, libc_elf: object | None = None) -> DummySession:
+        self.bind_binaries_calls.append({"elf": elf, "libc_elf": libc_elf})
+        self.elf = elf
+        self.libc_elf = libc_elf
+        return self
+
+    @property
+    def libc_base(self) -> int:
+        fact = self.rec.get_fact("libc.base")
+        if fact is None or not isinstance(fact.value, int):
+            raise RuntimeError("libc.base 尚未推导，可能是多候选情况，请明确指定或编写爆破逻辑。")
+        return fact.value
+
+    @property
+    def libc_version(self) -> str:
+        fact = self.rec.get_fact("libc.version")
+        if fact is None or not isinstance(fact.value, str):
+            raise RuntimeError("libc.version 尚未确认。")
+        return fact.value
 
 
 @dataclass
@@ -205,7 +228,7 @@ def test_script_start_uses_process_by_default(
     result = entry.start()
 
     assert result is entry
-    assert entry.as_session is session
+    assert entry.session is session
     assert entry.io is session.io
     assert len(calls) == 1
     assert calls[0]["target"].kind == "process"
@@ -392,7 +415,7 @@ def test_script_debug_falls_back_to_start_when_gdb_flag_is_off(
     entry = CHun.script("./challenge")
 
     assert entry.debug("b *main") is entry
-    assert entry.as_session is session
+    assert entry.session is session
 
 
 def test_script_gdb_warns_for_remote_session(
@@ -457,7 +480,7 @@ def test_script_session_property_requires_start(
     entry = CHun.script("./challenge")
 
     with pytest.raises(RuntimeError):
-        _ = entry.as_session
+        _ = entry.session
 
     with pytest.raises(RuntimeError):
         _ = entry.rec
@@ -480,16 +503,11 @@ def test_script_uses_explicit_libc_when_provided(
     ]
 
 
-def test_script_start_binds_default_elf_and_libc_to_resolve(
+def test_script_start_binds_default_elf_and_libc_to_session(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
 ) -> None:
     session = DummySession(kind="process")
-    bind_calls: list[dict[str, Any]] = []
-    session.resolve = SimpleNamespace(
-        name="resolve",
-        bind_defaults=lambda **kwargs: bind_calls.append(kwargs),
-    )
 
     def fake_from_specs(
         cls: type[CHun], target: TargetSpec, transport: Any
@@ -503,7 +521,7 @@ def test_script_start_binds_default_elf_and_libc_to_resolve(
     entry = CHun.script("./challenge", libc="./libc.so.6")
     entry.start()
 
-    assert bind_calls == [{"elf": entry.elf, "libc_elf": entry.libc}]
+    assert session.bind_binaries_calls == [{"elf": entry.elf, "libc_elf": entry.libc}]
 
 
 def test_script_start_is_chainable(
@@ -523,7 +541,7 @@ def test_script_start_is_chainable(
 
     entry = CHun.script("./challenge").start()
 
-    assert entry.as_session is session
+    assert entry.session is session
     assert entry.rec is session.rec
     assert entry.resolve is session.resolve
 
@@ -601,7 +619,7 @@ def test_script_context_manager_opens_and_closes_session(
     monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
 
     with CHun.script("./challenge") as entry:
-        assert entry.as_session is session
+        assert entry.session is session
 
     assert session.open_calls == 1
     assert session.close_calls == 1
