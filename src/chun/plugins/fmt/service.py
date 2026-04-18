@@ -715,7 +715,7 @@ class FmtService:
         return int(value)
 
     def _resolve_target_symbol(self, name: str) -> int:
-        bound_elf = getattr(self.session.resolve, "default_elf", None)
+        bound_elf = getattr(self.session, "elf", None)
         if bound_elf is not None:
             resolved = self._resolve_from_object(bound_elf, name)
             if resolved is not None:
@@ -729,10 +729,7 @@ class FmtService:
         except Exception as exc:
             last_exc = exc
 
-        for obj in (
-            getattr(self.session.resolve, "default_libc_elf", None),
-            getattr(self.session.resolve, "default_elf", None),
-        ):
+        for obj in (getattr(self.session, "libc_elf", None), getattr(self.session, "elf", None)):
             if obj is None:
                 continue
             resolved = self._resolve_from_object(obj, name, include_base=True)

@@ -115,103 +115,13 @@ class CHunSession:
         *,
         elf: object | None = None,
         libc_elf: object | None = None,
-    ) -> "CHunSession":
+        source: str = "session",
+    ) -> None:
         """绑定当前会话使用的 ELF / libc ELF 富对象，并同步标量上下文。"""
         if elf is not None:
             self.elf = elf
-            self._sync_binary_context("binary", elf, kind=ContextKind.ENVIRONMENT)
-            self._sync_arch_context(elf)
         if libc_elf is not None:
             self.libc_elf = libc_elf
-            self._sync_binary_context("libc", libc_elf, kind=ContextKind.LIBC)
-        return self
-
-    def _sync_binary_context(
-        self, prefix: str, binary: object, *, kind: ContextKind
-    ) -> None:
-        path = getattr(binary, "path", None)
-        arch = getattr(binary, "arch", None)
-        bits = getattr(binary, "bits", None)
-
-        if isinstance(path, str) and path:
-            self.registry.set_context(
-                f"{prefix}.path",
-                path,
-                kind=kind,
-                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
-            )
-        if isinstance(arch, str) and arch:
-            self.registry.set_context(
-                f"{prefix}.arch",
-                arch,
-                kind=kind,
-                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
-            )
-        if isinstance(bits, int):
-            self.registry.set_context(
-                f"{prefix}.bits",
-                bits,
-                kind=kind,
-                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
-            )
-
-    def _sync_arch_context(self, binary: object) -> None:
-        bits = getattr(binary, "bits", None)
-        endian = getattr(binary, "endian", None)
-        pointer_size = getattr(binary, "bytes", None)
-
-        if isinstance(bits, int):
-            self.registry.set_context(
-                "arch.bits",
-                bits,
-                kind=ContextKind.ENVIRONMENT,
-                domain=RecordDomain.ELF,
-            )
-        if isinstance(endian, str) and endian:
-            self.registry.set_context(
-                "arch.endian",
-                endian,
-                kind=ContextKind.ENVIRONMENT,
-                domain=RecordDomain.ELF,
-            )
-        if isinstance(pointer_size, int):
-            self.registry.set_context(
-                "arch.pointer_size",
-                pointer_size,
-                kind=ContextKind.ENVIRONMENT,
-                domain=RecordDomain.ELF,
-            )
-
-    def open(self) -> "CHunSession":
-        """显式打开 transport。"""
-        self.transport.open()
-        self._sync_transport_context()
-        return self
-
-    def close(self) -> None:
-        """关闭 transport。"""
-        self.transport.close()
-        self._sync_transport_context()
-
-    def reconnect(self) -> None:
-        """重建 transport。"""
-        self.transport.reconnect()
-        self._sync_transport_context()
-
-    def bind_binaries(
-        self,
-        *,
-        elf: object | None = None,
-        libc_elf: object | None = None,
-        source: str = "session",
-    ) -> None:
-        """把运行时 ELF/libc 绑定到 session，并同步规范化 context。"""
-        if elf is not None:
-            self.elf = elf
-        if libc_elf is not None:
-            self.libc_elf = libc_elf
-
-        self.resolve.bind_defaults(elf=self.elf, libc_elf=self.libc_elf)
 
         if self.elf is not None:
             self._sync_binary_context(
@@ -231,6 +141,22 @@ class CHunSession:
                 domain=RecordDomain.LIBC,
                 source=source,
             )
+
+    def open(self) -> "CHunSession":
+        """显式打开 transport。"""
+        self.transport.open()
+        self._sync_transport_context()
+        return self
+
+    def close(self) -> None:
+        """关闭 transport。"""
+        self.transport.close()
+        self._sync_transport_context()
+
+    def reconnect(self) -> None:
+        """重建 transport。"""
+        self.transport.reconnect()
+        self._sync_transport_context()
 
     @property
     def rec(self) -> EvidenceRegistry:

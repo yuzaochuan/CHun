@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol, SupportsInt
 
 from ...bridges.pwntools import MemLeakAdapter
@@ -47,6 +48,58 @@ class ResolveService:
 
     def _session_libc_elf(self) -> object | None:
         return None if self.session is None else self.session.libc_elf
+
+    def _normalize_symbol_name(self, raw_name: str) -> str:
+        if self.catalog_service is not None:
+            normalize = getattr(self.catalog_service, "_normalize_name", None)
+            if callable(normalize):
+                return str(normalize(raw_name))
+
+        return re.split(r"[@_](got|plt|got\.plt)", raw_name, flags=re.IGNORECASE)[0].strip()
+
+    @staticmethod
+    def _offset_from_bound_object(obj: object, value: SupportsInt) -> int:
+        resolved = int(value)
+        base_hint = getattr(obj, "address", 0)
+        if isinstance(base_hint, int) and base_hint > 0 and resolved >= base_hint:
+            return resolved - base_hint
+        return resolved
+
+    def _resolve_from_bound_libc(self, name: str, *, base_value: int) -> int | None:
+        libc_elf = self._session_libc_elf()
+        if libc_elf is None:
+            return None
+
+        normalized = self._normalize_symbol_name(name)
+        for attr in ("sym", "symbols"):
+            table = getattr(libc_elf, attr, None)
+            if not isinstance(table, Mapping):
+                continue
+            for candidate in (name, normalized):
+                if candidate not in table:
+                    continue
+                return base_value + self._offset_from_bound_object(libc_elf, table[candidate])
+
+        if normalized == "str_bin_sh":
+            search = getattr(libc_elf, "search", None)
+            if callable(search):
+                try:
+                    match = next(search(b"/bin/sh"))
+                except Exception:
+                    return None
+                return base_value + self._offset_from_bound_object(libc_elf, match)
+        return None
+
+    def _read_libc_base(self) -> int:
+        base_record = self.registry.get_fact("libc.base")
+        if base_record is None:
+            observation = self.registry.get_observation("libc.base")
+            base_value = observation.value if observation is not None else None
+        else:
+            base_value = base_record.value
+        if not isinstance(base_value, int):
+            raise ResolverError("缺少已确认的 libc.base。")
+        return base_value
 
     def memleak(
         self,
@@ -141,22 +194,19 @@ class ResolveService:
         )
 
     def symbol(self, name: str) -> int:
-        """基于已确认的 libc base/version 计算绝对地址。"""
-        if self.catalog_service is None:
-            raise ResolverError("缺少 catalog_service 依赖。")
+        """基于已确认的 libc base 按 mix 模式计算 libc 绝对地址。"""
+        base_value = self._read_libc_base()
 
-        base_record = self.registry.get_fact("libc.base")
-        if base_record is None:
-            observation = self.registry.get_observation("libc.base")
-            base_value = observation.value if observation is not None else None
-        else:
-            base_value = base_record.value
-        if not isinstance(base_value, int):
-            raise ResolverError("缺少已确认的 libc.base。")
+        resolved = self._resolve_from_bound_libc(name, base_value=base_value)
+        if resolved is not None:
+            return resolved
+
+        if self.catalog_service is None:
+            raise ResolverError(f"无法解析符号 {name}：缺少 catalog_service，且未命中已绑定 libc_elf。")
 
         version_fact = self.registry.get_fact("libc.version")
         if version_fact is None:
-            raise ResolverError("缺少已确认的 libc.version。")
+            raise ResolverError(f"无法解析符号 {name}：未命中已绑定 libc_elf，且缺少已确认的 libc.version。")
         libc_id = version_fact.metadata.get("libc_id")
         if not isinstance(libc_id, int):
             raise ResolverError("libc.version 缺少 libc_id 元数据。")

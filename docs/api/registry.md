@@ -144,9 +144,10 @@
 `session.resolve.symbol(name)` 则会继续消费事实层：
 
 1. 读取 `libc.base`
-2. 读取 `libc.version.metadata["libc_id"]`
-3. 通过本地 SQLite catalog 查询 offset
-4. 返回 `libc.base + offset`
+2. 若 session 已绑定 `libc_elf`，优先直接从本地 `libc` 解析 offset
+3. 若本地 `libc_elf` 不可用或缺符号，再读取 `libc.version.metadata["libc_id"]`
+4. 通过本地 SQLite catalog 查询 offset
+5. 返回 `libc.base + offset`
 
 这里的 `name` 支持服务层归一化，因此 `puts@got`、`write_plt`、`str_bin_sh` 这类常见写法都可以直接传入，不需要污染底层 catalog 表结构。
 

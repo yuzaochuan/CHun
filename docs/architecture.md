@@ -68,7 +68,7 @@
 
 - `catalog/service.py` 负责服务层归一化与 façade，不泄漏 SQL 到 inference / resolve
 - `InferenceService` 负责调度“泄漏 -> catalog 检索 -> artifact/fact 回写”，并在版本被确认后自动补齐 `libc.base`
-- `ResolveService` 负责消费 `libc.base + libc.version` 并换算绝对地址
+- `ResolveService` 负责消费 `libc.base`，并以 mix 模式优先结合已绑定的 `libc_elf`；仅在本地 `libc_elf` 不可用或缺符号时才回退到 `libc.version + catalog`
 
 ## Libc Catalog 构建策略
 

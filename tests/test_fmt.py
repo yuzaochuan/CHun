@@ -107,9 +107,15 @@ def test_session_exposes_fmt_service() -> None:
 
 def test_fmt_plan_writes_uses_bound_elf_and_libc_resolution() -> None:
     session = build_session()
-    session.resolve.bind_defaults(
+    session.bind_binaries(
         elf=SimpleNamespace(got={"printf@got": 0x404018}, bits=64, little_endian=True),
         libc_elf=SimpleNamespace(sym={"system": 0x4C490}, address=0x7FFFF7DD0000),
+    )
+    session.rec.record_fact(
+        "libc.base",
+        0x7FFFF7DD0000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
     )
     service = FmtService(session)
 
@@ -157,11 +163,7 @@ def test_fmt_service_normalization_uses_session_resolve_for_symbol_inputs() -> N
         "printf@got": 0x404018,
         "system": 0x7FFFF7E1C490,
     }
-    session.resolve = SimpleNamespace(
-        symbol=lambda name: calls.append(name) or mapping[name],
-        default_elf=None,
-        default_libc_elf=None,
-    )
+    session.resolve = SimpleNamespace(symbol=lambda name: calls.append(name) or mapping[name])
 
     plan = session.fmt.plan_writes(
         {"printf@got": "system"},
@@ -341,9 +343,15 @@ def test_fmt_service_find_offset_uses_default_prober() -> None:
 
 def test_fmt_blind_facade_defaults_to_atom_tasks() -> None:
     session = build_session()
-    session.resolve.bind_defaults(
+    session.bind_binaries(
         elf=SimpleNamespace(got={"printf@got": 0x404018}, bits=64, little_endian=True),
         libc_elf=SimpleNamespace(sym={"system": 0x4C490}, address=0x7FFFF7DD0000),
+    )
+    session.rec.record_fact(
+        "libc.base",
+        0x7FFFF7DD0000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
     )
     session.fmt = FmtService(session)
 
@@ -511,9 +519,15 @@ def test_default_renderer_applies_modulo_padding_wrap() -> None:
 
 def test_service_render_plan_records_rendered_artifacts() -> None:
     session = build_session()
-    session.resolve.bind_defaults(
+    session.bind_binaries(
         elf=SimpleNamespace(got={"printf@got": 0x404018}, bits=64, little_endian=True),
         libc_elf=SimpleNamespace(sym={"system": 0x4C490}, address=0x7FFFF7DD0000),
+    )
+    session.rec.record_fact(
+        "libc.base",
+        0x7FFFF7DD0000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
     )
     session.fmt.set_offset(6)
 

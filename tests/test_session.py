@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from chun import CHun, CHunSession
 from chun.core.inference import InferenceService
@@ -112,8 +113,6 @@ def test_session_bind_binaries_syncs_arch_and_binary_context() -> None:
 
     assert session.elf is elf
     assert session.libc_elf is libc_elf
-    assert session.resolve.default_elf is elf
-    assert session.resolve.default_libc_elf is libc_elf
     assert session.rec.get_context("binary.path").value == "./challenge"
     assert session.rec.get_context("binary.arch").value == "i386"
     assert session.rec.get_context("binary.bits").value == 32
@@ -138,8 +137,6 @@ def test_session_bind_binaries_is_partial_safe() -> None:
 
     assert session.elf is elf
     assert session.libc_elf is libc_elf
-    assert session.resolve.default_elf is elf
-    assert session.resolve.default_libc_elf is libc_elf
     assert session.rec.get_context("binary.path").value == "./challenge"
     assert session.rec.get_context("libc.path").value == "./libc.so.6"
 
@@ -158,7 +155,6 @@ def test_session_bind_binaries_is_idempotent() -> None:
     session.bind_binaries(elf=elf, source="script")
 
     assert session.elf is elf
-    assert session.resolve.default_elf is elf
     assert session.rec.get_context("arch.bits").value == 64
     assert session.rec.get_context("binary.path").value == "./challenge"
     assert first_bits is not None

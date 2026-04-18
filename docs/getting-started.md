@@ -161,7 +161,7 @@ blind = CHun.blind(lambda: object())
 # blind.resolve.symbol_via_dynelf("system", leak_primitive=leak_func, pointer=0x601018)
 
 # fmt planning
-# session.resolve.bind_defaults(elf=elf, libc_elf=libc)
+# session.bind_binaries(elf=elf, libc_elf=libc)
 # session.rec.record_fact("libc.base", 0x7F1234500000)
 # plan = session.fmt.plan_writes({"printf@got": "system"})
 # print(plan.total_atoms, plan.total_tasks)

@@ -143,7 +143,7 @@ t.gdb("b *main\nc")
 - `t.recv_leak(..., mode="raw")` 默认按常见 CTF 泄漏习惯读取 32 位 `4` 字节、64 位 `6` 字节，再按 `t.elf.bytes` 补零解析
 - `t.recv_leak(..., mode="hex")` 支持 `0x...` 十六进制字符串解析
 - `t.libc_base` / `t.libc_version` 以及 `t.session.libc_base` / `t.session.libc_version` 提供快捷读取；若尚未确认则抛 `RuntimeError`
-- `t.resolve.symbol("str_bin_sh")` / `t.resolve.symbol("puts@got")` 会自动做后缀剥离和 alias 归一化，再结合 `libc.base + libc.version` 解析绝对地址
+- `t.resolve.symbol("str_bin_sh")` / `t.resolve.symbol("puts@got")` 会自动做后缀剥离和 alias 归一化；已绑定 `t.libc` 时优先走本地 `libc_elf + libc.base`，否则回退到 `libc.version + catalog`
 - 访问 `t.session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
 - 高频交互方法可直接使用 `t.sendlineafter()` / `t.recvline()` / `t.interactive()` 及其 alias
 - 低频 tube 方法通过 `__getattr__` fallback 到 `t.io`

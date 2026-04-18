@@ -53,6 +53,14 @@ class DummyElf:
         self.endian = endian
         self.sym = {} if sym is None else sym
 
+    def search(self, needle: bytes):
+        if needle != b"/bin/sh":
+            return iter(())
+        offset = self.sym.get("str_bin_sh")
+        if offset is None:
+            return iter(())
+        return iter((offset,))
+
 
 def build_session(*, libc_catalog: LibcCatalogService | None = None) -> CHunSession:
     return CHunSession(
@@ -701,6 +709,32 @@ def test_resolve_symbol_raises_when_required_facts_are_missing() -> None:
         pass
     else:
         raise AssertionError("expected ResolverError")
+
+
+def test_resolve_symbol_prefers_bound_libc_elf_without_requiring_version_fact() -> None:
+    session = build_session()
+    session.bind_binaries(libc_elf=DummyElf(path="./libc.so.6", sym={"system": 0x4C490}))
+    session.rec.record_fact(
+        "libc.base",
+        0x7F0000000000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+
+    assert session.resolve.symbol("system") == 0x7F0000000000 + 0x4C490
+
+
+def test_resolve_symbol_uses_bound_libc_search_for_str_bin_sh() -> None:
+    session = build_session()
+    session.bind_binaries(libc_elf=DummyElf(path="./libc.so.6", sym={"str_bin_sh": 0x1B45BD}))
+    session.rec.record_fact(
+        "libc.base",
+        0x7F0000000000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+
+    assert session.resolve.symbol("str_bin_sh") == 0x7F0000000000 + 0x1B45BD
 
 
 def test_resolve_uses_session_bound_libc_elf_for_base_inference() -> None:
