@@ -28,6 +28,7 @@ from ...core.models import (
     ValueLike,
 )
 from .planner import DefaultFmtWritePlanner
+from .readers import DefaultFmtReadExecutor
 from .probes import FmtOffsetProbe as DefaultFmtOffsetProbe
 from .renderer import DefaultFmtTaskRenderer
 from .writers import DefaultFmtPlanExecutor
@@ -149,7 +150,7 @@ class FmtService:
         self.session = session
         self._prober = prober if prober is not None else DefaultFmtOffsetProbe()
         self._planner = planner if planner is not None else DefaultFmtWritePlanner()
-        self._reader = reader
+        self._reader = reader if reader is not None else DefaultFmtReadExecutor()
         self._renderer = renderer if renderer is not None else DefaultFmtTaskRenderer()
         self._executor = (
             executor
@@ -435,6 +436,15 @@ class FmtService:
         """
         return self.plan_writes({target: value}, **kwargs)
 
+    def write(
+        self,
+        target: AddressLike,
+        value: ValueLike,
+        **kwargs: object,
+    ) -> list[FmtExecutionReceipt]:
+        """单目标高层写接口：内部自动规划并执行。"""
+        return self.writes({target: value}, **kwargs)
+
     def plan_writes(
         self,
         writes: Mapping[AddressLike, ValueLike] | Sequence[FmtWriteRequest],
@@ -517,6 +527,47 @@ class FmtService:
             )
 
         return plan
+
+    def writes(
+        self,
+        writes: Mapping[AddressLike, ValueLike] | Sequence[FmtWriteRequest],
+        *,
+        strategy: FmtWriteStrategy = FmtWriteStrategy.AUTO,
+        chunk_width: int | None = None,
+        value_bits: int | None = None,
+        task_policy: FmtTaskPolicy = FmtTaskPolicy.PACKED,
+        offset: int | None = None,
+        layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
+        initial_counter: int = 0,
+        artifact_name: str | None = "fmt.write.plan",
+        result_prefix: str = "fmt.write",
+        store: bool = True,
+        record_rendered: bool = True,
+        executor: FmtPlanExecutor | None = None,
+        **kwargs: object,
+    ) -> list[FmtExecutionReceipt]:
+        """批量高层写接口：plan -> execute 的 façade。"""
+        plan = self.plan_writes(
+            writes,
+            strategy=strategy,
+            chunk_width=chunk_width,
+            value_bits=value_bits,
+            task_policy=task_policy,
+            offset=offset,
+            artifact_name=artifact_name,
+            store=store,
+        )
+        return self.execute_plan(
+            plan,
+            executor=executor,
+            offset=offset,
+            layout=layout,
+            initial_counter=initial_counter,
+            result_prefix=result_prefix,
+            record=store,
+            record_rendered=record_rendered,
+            **kwargs,
+        )
 
     def split_plan(
         self,

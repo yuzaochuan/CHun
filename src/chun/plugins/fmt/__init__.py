@@ -32,6 +32,7 @@ from ...core.models import (
 from .blind import BlindFmtService
 from .planner import DefaultFmtWritePlanner
 from .probes import FmtOffsetNotFoundError, FmtOffsetProbe, FmtOffsetProbeError
+from .readers import DefaultFmtReadExecutor
 from .renderer import DefaultFmtTaskRenderer
 from .writers import DefaultFmtPlanExecutor
 from .service import (
@@ -54,6 +55,7 @@ class FmtCapability:
 __all__ = [
     "AddressLike",
     "BlindFmtService",
+    "DefaultFmtReadExecutor",
     "DefaultFmtPlanExecutor",
     "DefaultFmtWritePlanner",
     "DefaultFmtTaskRenderer",

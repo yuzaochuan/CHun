@@ -174,7 +174,7 @@ t.gdb("b *main\nc")
 - `session.gdb_mi`：结构化 GDB/MI 命令
 - `session.resolve`：MemLeak / DynELF / symbol 解析
 - `session.crash`：core dump 分析
-- `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、生成并持久化 `FmtWritePlan`、执行 task 级渲染与默认 executor 分发；offset probe 会把原始响应写 observation、结构化结果写 artifact、最终 offset 写 fact；`execute_plan()` 默认会先 `render_plan()` 再按 transport 类型选择 `sendline` 或 blind `exchange`，同时把原始响应写 observation、把 `FmtExecutionReceipt` 写 artifact；`find_offset(loginfo=False)` 默认静默，显式打开后会打印命中的 index / token / signature / confidence；内置 planner 默认支持按 `BYTE/SHORT/INT/PTR` 做 little-endian 数值切片
+- `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、提供默认 `%s` 读后端、生成并持久化 `FmtWritePlan`、执行 task 级渲染与默认 executor 分发；高层 `read()` / `write()` / `writes()` façade 现在已可直接用，`execute_plan()` 默认会先 `render_plan()` 再按 transport 类型选择 `sendline` 或 blind `exchange`，同时把原始响应写 observation、把 `FmtExecutionReceipt` 写 artifact；`find_offset(loginfo=False)` 默认静默，显式打开后会打印命中的 index / token / signature / confidence；内置 planner 默认支持按 `BYTE/SHORT/INT/PTR` 做 little-endian 数值切片
 - `ScriptEntry.fmt`：脚本态 `session.fmt` 语法糖；除常规转发外，`s.fmt.find_offset(...)` 会默认以 `loginfo=True` 打印探测结果，等价于 `s.session.fmt.find_offset(..., loginfo=True)`
 
 ## 示例
@@ -209,6 +209,14 @@ print(receipts[0].response)
 s = CHun.script("./challenge").start()
 result = s.fmt.find_offset(max_slots=16)
 print(result.index)
+```
+
+```python
+leak = p.fmt.read(0x404040, size=8, mode="raw", offset=6)
+print(leak.raw)
+
+receipts = p.fmt.write("printf@got", "system", strategy="short", offset=6)
+print(receipts[0].response)
 ```
 
 ## 本阶段边界

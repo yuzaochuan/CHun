@@ -169,6 +169,8 @@ blind = CHun.blind(lambda: object())
 # rendered = session.fmt.render_plan(plan, offset=6)
 # receipts = session.fmt.execute_plan(plan, offset=6)
 # print(receipts[0].response)
+# leak = session.fmt.read(0x404040, size=8, mode="raw", offset=6)
+# receipts = session.fmt.write("printf@got", "system", strategy="short", offset=6)
 
 # script facade sugar
 # s = CHun.script("./challenge").start()

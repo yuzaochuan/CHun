@@ -20,6 +20,14 @@ class BlindFmtService:
         kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
         return self.base.plan_writes(writes, **kwargs)
 
+    def write(self, target: object, value: object, **kwargs: object) -> list[object]:
+        kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
+        return self.base.write(target, value, **kwargs)
+
+    def writes(self, writes: object, **kwargs: object) -> list[object]:
+        kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
+        return self.base.writes(writes, **kwargs)
+
     def split_plan(
         self,
         plan: FmtWritePlan,

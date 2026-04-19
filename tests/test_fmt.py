@@ -15,6 +15,7 @@ from chun.core.models import (
     FmtLayoutPolicy,
     FmtOffsetProbeMode,
     FmtOffsetProbeResult,
+    FmtReadMode,
     FmtWriteRequest,
     FmtValueRef,
     FmtTargetRef,
@@ -25,6 +26,7 @@ from chun.core.models import (
     TransportSpec,
 )
 from chun.plugins.fmt import (
+    DefaultFmtReadExecutor,
     DefaultFmtPlanExecutor,
     DefaultFmtWritePlanner,
     DefaultFmtTaskRenderer,
@@ -81,7 +83,9 @@ class DummyExecTransport:
     def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
         data = self.response
         if delim in data:
-            end = data.index(delim) + (0 if drop else len(delim))
+            end = data.index(delim) + len(delim)
+            if drop:
+                return data[: end - len(delim)]
             return data[:end]
         return data
 
@@ -103,7 +107,9 @@ class DummyBlindRawConnection:
     def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
         data = self.response
         if delim in data:
-            end = data.index(delim) + (0 if drop else len(delim))
+            end = data.index(delim) + len(delim)
+            if drop:
+                return data[: end - len(delim)]
             return data[:end]
         return data
 
@@ -497,6 +503,67 @@ def test_fmt_blind_facade_defaults_to_atom_tasks() -> None:
     plan = session.fmt.blind().plan_writes({"printf@got": "system"})
 
     assert plan.task_policy == FmtTaskPolicy.BY_ATOM
+
+
+def test_default_reader_reads_raw_bytes_via_string_primitive() -> None:
+    session = build_exec_session(b"ABCD::CHUN::tail")
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+    reader = DefaultFmtReadExecutor()
+    target = FmtTargetRef(raw=0x804A020, address=0x804A020)
+
+    leak = reader.read(
+        session,
+        target,
+        size=4,
+        mode=FmtReadMode.RAW,
+        offset=7,
+    )
+
+    assert leak.raw == b"ABCD"
+    assert leak.decoded == b"ABCD"
+    assert leak.metadata["dispatch"] == "sendline"
+    assert session.transport.sent == [  # type: ignore[attr-defined]
+        ("sendline", b"%7$s::CHUN::" + (0x804A020).to_bytes(4, "little"))
+    ]
+
+
+def test_fmt_service_read_uses_default_reader_and_records_observation() -> None:
+    session = build_exec_session(b"WXYZ::CHUN::")
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+    session.fmt.set_offset(6)
+
+    leak = session.fmt.read(0x804A030, size=4, mode=FmtReadMode.POINTER)
+
+    assert leak.raw == b"WXYZ"
+    assert leak.decoded == int.from_bytes(b"WXYZ", "little")
+    stored = session.rec.get_observation("fmt.leak.0x804a030")
+    assert stored is not None
+    assert stored.domain == RecordDomain.FMT
+    assert stored.value == leak
+
+
+def test_fmt_service_write_convenience_executes_plan_directly() -> None:
+    session = build_exec_session(b"write-ok\n")
+    session.resolve.bind_defaults(
+        elf=SimpleNamespace(got={"printf@got": 0x404018}, bits=64, little_endian=True),
+        libc_elf=SimpleNamespace(sym={"system": 0x4C490}, address=0x7FFFF7DD0000),
+    )
+    session.fmt.set_offset(6)
+
+    receipts = session.fmt.write(
+        "printf@got",
+        "system",
+        strategy=FmtWriteStrategy.SHORT,
+        task_policy=FmtTaskPolicy.BY_ATOM,
+    )
+
+    assert len(receipts) == 3
+    assert all(receipt.response == b"write-ok\n" for receipt in receipts)
+    assert session.rec.get_artifact("fmt.write.plan") is not None
+    assert session.rec.get_artifact("fmt.write.task.0") is not None
+    assert session.rec.get_observation("fmt.write.response.0") is not None
 
 
 def test_default_planner_splits_little_endian_byte_writes_minimally() -> None:

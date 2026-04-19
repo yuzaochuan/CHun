@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING
 
 from ...core.models import (
-    FmtExecutionMethod,
     FmtExecutionReceipt,
     FmtLayoutPolicy,
     FmtWritePlan,
@@ -12,6 +11,7 @@ from ...core.models import (
     RenderedFmtTask,
 )
 from .renderer import DefaultFmtTaskRenderer
+from .runtime import dispatch_fmt_payload
 
 if TYPE_CHECKING:
     from chun.core.session import CHunSession
@@ -56,7 +56,7 @@ class DefaultFmtPlanExecutor:
                 initial_counter=initial_counter,
             )
 
-        response, dispatch, metadata = self._dispatch_payload(
+        response, dispatch, metadata = dispatch_fmt_payload(
             session,
             rendered_task.payload,
             receive=receive,
@@ -75,73 +75,5 @@ class DefaultFmtPlanExecutor:
             source=source,
             metadata=metadata,
         )
-
-    def _dispatch_payload(
-        self,
-        session: "CHunSession",
-        payload: bytes,
-        *,
-        receive: bool,
-        newline: bool,
-        recv_bytes: int,
-        recv_until: bytes | None,
-    ) -> tuple[bytes | None, FmtExecutionMethod, dict[str, object]]:
-        transport = session.io
-
-        if self._supports_exchange(session):
-            receiver = self._build_exchange_receiver(
-                receive=receive,
-                recv_until=recv_until,
-                recv_bytes=recv_bytes,
-            )
-            response = transport.exchange(payload, receive=receiver, newline=newline)
-            return response, FmtExecutionMethod.EXCHANGE, {
-                "receive": receive,
-                "recv_until": recv_until,
-                "recv_bytes": recv_bytes,
-                "newline": newline,
-            }
-
-        if newline:
-            transport.sendline(payload)
-            dispatch = FmtExecutionMethod.SENDLINE
-        else:
-            transport.send(payload)
-            dispatch = FmtExecutionMethod.SEND
-
-        response = None
-        if receive:
-            if recv_until is not None:
-                response = transport.recvuntil(recv_until)
-            else:
-                response = transport.recv(recv_bytes)
-
-        return response, dispatch, {
-            "receive": receive,
-            "recv_until": recv_until,
-            "recv_bytes": recv_bytes,
-            "newline": newline,
-        }
-
-    @staticmethod
-    def _supports_exchange(session: "CHunSession") -> bool:
-        return bool(
-            session.transport_spec.kind == "blind-reconnect"
-            and hasattr(session.transport, "exchange")
-        )
-
-    @staticmethod
-    def _build_exchange_receiver(
-        *,
-        receive: bool,
-        recv_until: bytes | None,
-        recv_bytes: int,
-    ) -> Callable[[Any], bytes | None] | None:
-        if not receive:
-            return None
-        if recv_until is not None:
-            return lambda raw: raw.recvuntil(recv_until)
-        return lambda raw: raw.recv(recv_bytes)
-
 
 __all__ = ["DefaultFmtPlanExecutor"]
