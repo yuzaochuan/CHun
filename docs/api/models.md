@@ -121,6 +121,8 @@ FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而�
 - `FmtWritePlan`：描述 service 输出的完整计划，额外暴露 `total_atoms`、`total_tasks` 与 `is_blind_safe`
 - `FmtRenderStep`：描述单个 atom 在 renderer 阶段的具体决策，包括 padding、arg index、specifier 与计数器推进
 - `RenderedFmtTask`：描述 renderer 产出的纯字节任务，包含最终 payload、layout、初始/最终计数器
+- `FmtExecutionMethod`：描述 executor 最终采用的分发方式，例如 `sendline` 或 `exchange`
+- `FmtExecutionReceipt`：描述一次 task 执行回执，包含 `rendered`、`payload`、`response`、`transport_kind` 与 `dispatch`
 
 这组 FMT DTO 现在统一采用 `slots=True, frozen=True`。语义上它们是“可缓存、可对比、可入库”的 IR，而不是 service 内部可随手改写的状态对象。为避免出现“dataclass 冻结了但 metadata 还能被偷偷改”的假不可变状态，`metadata` 也会在构造时被冻结。
 

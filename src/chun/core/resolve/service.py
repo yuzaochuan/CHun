@@ -38,15 +38,37 @@ class ResolveService:
         self.registry = registry
         self.infer = infer
         self.session = session
-        self.catalog_service = catalog_service if catalog_service is not None else infer.libc_catalog
+        self.catalog_service = (
+            catalog_service if catalog_service is not None else infer.libc_catalog
+        )
         self.memleak_adapter_cls = memleak_adapter_cls
-        self.dynelf_resolver = dynelf_resolver_cls(registry, adapter_cls=memleak_adapter_cls)
+        self.dynelf_resolver = dynelf_resolver_cls(
+            registry, adapter_cls=memleak_adapter_cls
+        )
+        self.default_elf: object | None = None
+        self.default_libc_elf: object | None = None
 
     def _session_elf(self) -> object | None:
-        return None if self.session is None else self.session.elf
+        if self.session is not None and self.session.elf is not None:
+            return self.session.elf
+        return self.default_elf
 
     def _session_libc_elf(self) -> object | None:
-        return None if self.session is None else self.session.libc_elf
+        if self.session is not None and self.session.libc_elf is not None:
+            return self.session.libc_elf
+        return self.default_libc_elf
+
+    def bind_defaults(
+        self,
+        *,
+        elf: object | None = None,
+        libc_elf: object | None = None,
+    ) -> None:
+        """绑定脚本态 / session 共享的默认 ELF 对象。"""
+        if elf is not None:
+            self.default_elf = elf
+        if libc_elf is not None:
+            self.default_libc_elf = libc_elf
 
     def memleak(
         self,

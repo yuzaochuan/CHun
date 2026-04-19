@@ -22,7 +22,7 @@ from .transports.pwntools_tube import PwntoolsTubeTransport
 if TYPE_CHECKING:
     from .core.session import CHunSession
 
-DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h")
+DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h", "-d")
 
 
 class ScriptEntry:

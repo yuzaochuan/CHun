@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from chun import CHun, CHunSession
 from chun.core.inference import InferenceService

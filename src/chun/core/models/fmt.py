@@ -14,6 +14,7 @@ FmtTargetOrigin: TypeAlias = Literal["absolute", "symbol"]
 FmtValueOrigin: TypeAlias = Literal["literal", "symbol"]
 FmtWordSize: TypeAlias = Literal[1, 2, 4, 8]
 FmtRenderSpecifier: TypeAlias = Literal["hhn", "hn", "n", "lln"]
+FmtExecutionDispatch: TypeAlias = Literal["send", "sendline", "exchange"]
 
 
 def _empty_metadata() -> Mapping[str, object]:
@@ -66,6 +67,14 @@ class FmtLayoutPolicy(str, Enum):
     ADDRESSES_FIRST = "addresses_first"
     ADDRESSES_LAST = "addresses_last"
     INTERLEAVED = "interleaved"
+
+
+class FmtExecutionMethod(str, Enum):
+    """fmt task 的执行分发方式。"""
+
+    SEND = "send"
+    SENDLINE = "sendline"
+    EXCHANGE = "exchange"
 
 
 @dataclass(slots=True, frozen=True)
@@ -297,9 +306,31 @@ class RenderedFmtTask:
         object.__setattr__(self, "metadata", _freeze_metadata(self.metadata))
 
 
+@dataclass(slots=True, frozen=True)
+class FmtExecutionReceipt:
+    """一次 fmt task 执行后的结构化回执。"""
+
+    task_index: int
+    rendered: RenderedFmtTask
+    payload: bytes
+    offset: int
+    transport_kind: str
+    dispatch: FmtExecutionMethod
+    response: bytes | None = None
+    source: str = "fmt.execute"
+    metadata: Mapping[str, object] = field(default_factory=_empty_metadata)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "dispatch", FmtExecutionMethod(self.dispatch))
+        object.__setattr__(self, "metadata", _freeze_metadata(self.metadata))
+
+
 __all__ = [
     "AddressLike",
     "FmtEndian",
+    "FmtExecutionDispatch",
+    "FmtExecutionMethod",
+    "FmtExecutionReceipt",
     "FmtOffsetProbeMode",
     "FmtOffsetProbeResult",
     "FmtLayoutPolicy",

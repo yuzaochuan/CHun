@@ -5,6 +5,8 @@ from .catalog import LibcCandidate, LibcLeakConstraint, LibcSearchResult
 from .fmt import (
     AddressLike,
     FmtEndian,
+    FmtExecutionMethod,
+    FmtExecutionReceipt,
     FmtLayoutPolicy,
     FmtOffsetProbeMode,
     FmtOffsetProbeResult,
@@ -53,6 +55,8 @@ __all__ = [
     "Fact",
     "FactKind",
     "FmtEndian",
+    "FmtExecutionMethod",
+    "FmtExecutionReceipt",
     "FmtLayoutPolicy",
     "FmtOffsetProbeMode",
     "FmtOffsetProbeResult",

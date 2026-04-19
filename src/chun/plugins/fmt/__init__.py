@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from ...core.models import (
     AddressLike,
     FmtEndian,
+    FmtExecutionMethod,
+    FmtExecutionReceipt,
     FmtLayoutPolicy,
     FmtRenderSpecifier,
     FmtRenderStep,
@@ -31,6 +33,7 @@ from .blind import BlindFmtService
 from .planner import DefaultFmtWritePlanner
 from .probes import FmtOffsetNotFoundError, FmtOffsetProbe, FmtOffsetProbeError
 from .renderer import DefaultFmtTaskRenderer
+from .writers import DefaultFmtPlanExecutor
 from .service import (
     FmtPlanExecutor,
     FmtReadExecutor,
@@ -51,10 +54,13 @@ class FmtCapability:
 __all__ = [
     "AddressLike",
     "BlindFmtService",
+    "DefaultFmtPlanExecutor",
     "DefaultFmtWritePlanner",
     "DefaultFmtTaskRenderer",
     "FmtCapability",
     "FmtEndian",
+    "FmtExecutionMethod",
+    "FmtExecutionReceipt",
     "FmtLayoutPolicy",
     "FmtRenderSpecifier",
     "FmtRenderStep",

@@ -10,6 +10,8 @@ import chun.plugins.fmt.service as fmt_service_mod
 from chun import CHunSession
 from chun.core.models import (
     FactKind,
+    FmtExecutionMethod,
+    FmtExecutionReceipt,
     FmtLayoutPolicy,
     FmtOffsetProbeMode,
     FmtOffsetProbeResult,
@@ -23,6 +25,7 @@ from chun.core.models import (
     TransportSpec,
 )
 from chun.plugins.fmt import (
+    DefaultFmtPlanExecutor,
     DefaultFmtWritePlanner,
     DefaultFmtTaskRenderer,
     FmtService,
@@ -32,6 +35,7 @@ from chun.plugins.fmt import (
     FmtWriteAtom,
     FmtWriteStrategy,
 )
+from chun.transports.blind_reconnect import BlindReconnectTransport
 
 
 class DummyTransport:
@@ -47,6 +51,64 @@ class DummyTransport:
 
     def reconnect(self) -> None:
         self.is_open = False
+
+
+class DummyExecTransport:
+    def __init__(self, response: bytes = b"ok") -> None:
+        self.is_open = False
+        self.raw = object()
+        self.sent: list[tuple[str, bytes]] = []
+        self.response = response
+
+    def open(self) -> None:
+        self.is_open = True
+
+    def close(self) -> None:
+        self.is_open = False
+
+    def reconnect(self) -> None:
+        self.is_open = False
+
+    def send(self, data: bytes) -> None:
+        self.sent.append(("send", data))
+
+    def sendline(self, data: bytes) -> None:
+        self.sent.append(("sendline", data))
+
+    def recv(self, n: int = 4096) -> bytes:
+        return self.response[:n]
+
+    def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
+        data = self.response
+        if delim in data:
+            end = data.index(delim) + (0 if drop else len(delim))
+            return data[:end]
+        return data
+
+
+class DummyBlindRawConnection:
+    def __init__(self, response: bytes) -> None:
+        self.response = response
+        self.sent: list[tuple[str, bytes]] = []
+
+    def send(self, data: bytes) -> None:
+        self.sent.append(("send", data))
+
+    def sendline(self, data: bytes) -> None:
+        self.sent.append(("sendline", data))
+
+    def recv(self, n: int = 4096) -> bytes:
+        return self.response[:n]
+
+    def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
+        data = self.response
+        if delim in data:
+            end = data.index(delim) + (0 if drop else len(delim))
+            return data[:end]
+        return data
+
+    def close(self) -> None:
+        return None
 
 
 class DummyProbeTransport:
@@ -85,6 +147,27 @@ def build_probe_session(response: bytes) -> CHunSession:
         target=TargetSpec(kind="process"),
         transport_spec=TransportSpec(kind="pwntools-tube"),
         transport=DummyProbeTransport(response),
+    )
+
+
+def build_exec_session(response: bytes = b"ok") -> CHunSession:
+    return CHunSession(
+        target=TargetSpec(kind="process"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyExecTransport(response),
+    )
+
+
+def build_blind_exec_session(response: bytes = b"blind-ok") -> CHunSession:
+    target = TargetSpec(kind="blind")
+    spec = TransportSpec(
+        kind="blind-reconnect",
+        metadata={"connection_factory": lambda: DummyBlindRawConnection(response)},
+    )
+    return CHunSession(
+        target=target,
+        transport_spec=spec,
+        transport=BlindReconnectTransport(target, spec),
     )
 
 
@@ -571,6 +654,110 @@ def test_default_renderer_applies_modulo_padding_wrap() -> None:
     assert step.counter_after == 0x102
     assert rendered.final_counter == 0x102
     assert rendered.payload.startswith(b"%4c%10$hhn")
+
+
+def test_default_executor_dispatches_rendered_payload_on_pwntools_transport() -> None:
+    session = build_exec_session(b"done\n")
+    atom = FmtWriteAtom(
+        request_index=0,
+        piece_index=0,
+        address=0x404018,
+        value=0x41,
+        width=1,
+    )
+    task = FmtWriteTask(task_index=0, atoms=(atom,), independent=True)
+    plan = CoreFmtWritePlan(
+        bits=64,
+        pointer_size=8,
+        endian="little",
+        offset=6,
+        strategy=FmtWriteStrategy.BYTE,
+        task_policy=FmtTaskPolicy.BY_ATOM,
+        requests=(),
+        atoms=(atom,),
+        tasks=(task,),
+    )
+    rendered = DefaultFmtTaskRenderer().render(task, plan=plan, offset=6)
+
+    receipt = DefaultFmtPlanExecutor().execute_task(
+        session,
+        task,
+        plan=plan,
+        offset=6,
+        rendered=rendered,
+    )
+
+    assert receipt.dispatch == FmtExecutionMethod.SENDLINE
+    assert receipt.payload == rendered.payload
+    assert receipt.response == b"done\n"
+    assert receipt.transport_kind == "pwntools-tube"
+    assert session.transport.sent == [("sendline", rendered.payload)]  # type: ignore[attr-defined]
+
+
+def test_default_executor_uses_exchange_for_blind_transport() -> None:
+    session = build_blind_exec_session(b"blind-result")
+    atom = FmtWriteAtom(
+        request_index=0,
+        piece_index=0,
+        address=0x404018,
+        value=0x41,
+        width=1,
+    )
+    task = FmtWriteTask(task_index=0, atoms=(atom,), independent=True)
+    plan = CoreFmtWritePlan(
+        bits=64,
+        pointer_size=8,
+        endian="little",
+        offset=6,
+        strategy=FmtWriteStrategy.BYTE,
+        task_policy=FmtTaskPolicy.BY_ATOM,
+        requests=(),
+        atoms=(atom,),
+        tasks=(task,),
+    )
+    rendered = DefaultFmtTaskRenderer().render(task, plan=plan, offset=6)
+
+    receipt = DefaultFmtPlanExecutor().execute_task(
+        session,
+        task,
+        plan=plan,
+        offset=6,
+        rendered=rendered,
+    )
+
+    assert receipt.dispatch == FmtExecutionMethod.EXCHANGE
+    assert receipt.response == b"blind-result"
+
+
+def test_service_execute_plan_uses_default_executor_and_records_results() -> None:
+    session = build_exec_session(b"exec-ok\n")
+    session.resolve.bind_defaults(
+        elf=SimpleNamespace(got={"printf@got": 0x404018}, bits=64, little_endian=True),
+        libc_elf=SimpleNamespace(sym={"system": 0x4C490}, address=0x7FFFF7DD0000),
+    )
+    session.fmt.set_offset(6)
+
+    plan = session.fmt.plan_writes(
+        {"printf@got": "system"},
+        strategy=FmtWriteStrategy.SHORT,
+        task_policy=FmtTaskPolicy.BY_ATOM,
+        store=False,
+    )
+
+    results = session.fmt.execute_plan(plan)
+
+    assert len(results) == plan.total_tasks
+    assert all(isinstance(item, FmtExecutionReceipt) for item in results)
+    assert results[0].dispatch == FmtExecutionMethod.SENDLINE
+    stored_result = session.rec.get_artifact("fmt.exec.task.0")
+    stored_response = session.rec.get_observation("fmt.exec.response.0")
+    stored_render = session.rec.get_artifact("fmt.exec.render.task.0")
+    assert stored_result is not None
+    assert stored_result.domain == RecordDomain.FMT
+    assert stored_response is not None
+    assert stored_response.value == b"exec-ok\n"
+    assert stored_render is not None
+    assert stored_render.domain == RecordDomain.FMT
 
 
 def test_service_render_plan_records_rendered_artifacts() -> None:

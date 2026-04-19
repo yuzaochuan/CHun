@@ -167,6 +167,8 @@ blind = CHun.blind(lambda: object())
 # print(plan.total_atoms, plan.total_tasks)
 # offset = session.fmt.find_offset(loginfo=True)
 # rendered = session.fmt.render_plan(plan, offset=6)
+# receipts = session.fmt.execute_plan(plan, offset=6)
+# print(receipts[0].response)
 
 # script facade sugar
 # s = CHun.script("./challenge").start()
@@ -179,5 +181,5 @@ blind = CHun.blind(lambda: object())
 
 ## 当前阶段边界
 
-- 已落地：session 入口、transport、registry、最小 inference、debug/resolve/crash bridge、fmt 计划/记录层
-- 暂未实现：fmt payload/executor 细节、heap/template 主体与 pwngdb/pwndbg 深集成
+- 已落地：session 入口、transport、registry、最小 inference、debug/resolve/crash bridge、fmt 探测/规划/渲染/执行链
+- 暂未实现：heap/template 主体与 pwngdb/pwndbg 深集成

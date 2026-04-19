@@ -7,6 +7,7 @@ from ..._compat import log
 from ...core.models import (
     AddressLike,
     FmtEndian,
+    FmtExecutionReceipt,
     FmtLayoutPolicy,
     FmtLeak,
     FmtOffset,
@@ -29,6 +30,7 @@ from ...core.models import (
 from .planner import DefaultFmtWritePlanner
 from .probes import FmtOffsetProbe as DefaultFmtOffsetProbe
 from .renderer import DefaultFmtTaskRenderer
+from .writers import DefaultFmtPlanExecutor
 
 if TYPE_CHECKING:
     from chun.core.session import CHunSession
@@ -103,8 +105,9 @@ class FmtPlanExecutor(Protocol):
         *,
         plan: FmtWritePlan,
         offset: int,
+        rendered: RenderedFmtTask | None = None,
         **kwargs: object,
-    ) -> object: ...
+    ) -> FmtExecutionReceipt: ...
 
 
 class FmtTaskRenderer(Protocol):
@@ -141,12 +144,18 @@ class FmtService:
         planner: FmtWritePlanner | None = None,
         reader: FmtReadExecutor | None = None,
         renderer: FmtTaskRenderer | None = None,
+        executor: FmtPlanExecutor | None = None,
     ) -> None:
         self.session = session
         self._prober = prober if prober is not None else DefaultFmtOffsetProbe()
         self._planner = planner if planner is not None else DefaultFmtWritePlanner()
         self._reader = reader
         self._renderer = renderer if renderer is not None else DefaultFmtTaskRenderer()
+        self._executor = (
+            executor
+            if executor is not None
+            else DefaultFmtPlanExecutor(renderer=self._renderer)
+        )
 
     # ------------------------------------------------------------------
     # public: offset
@@ -634,12 +643,15 @@ class FmtService:
         self,
         plan: FmtWritePlan,
         *,
-        executor: FmtPlanExecutor,
+        executor: FmtPlanExecutor | None = None,
         offset: int | None = None,
+        layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
+        initial_counter: int = 0,
         result_prefix: str = "fmt.exec",
         record: bool = True,
+        record_rendered: bool = True,
         **kwargs: object,
-    ) -> list[object]:
+    ) -> list[FmtExecutionReceipt]:
         """
         注意：
         这里不是 payload 算法实现层，而是 orchestration 层。
@@ -647,10 +659,15 @@ class FmtService:
         逻辑：
         1. offset 优先级：
            arg > plan.offset > registry(fmt.offset)
-        2. 对 plan.tasks 逐个调用 executor.execute_task(...)
-        3. 每个 task 的结果写 artifact
-        4. 返回结果列表
+        2. 先 render_plan() 生成 RenderedFmtTask
+        3. 对每个 rendered task 调用 executor.execute_task(...)
+        4. 原始响应写 observation，结构化结果写 artifact
+        5. 返回结构化回执列表
         """
+        backend = executor or self._executor
+        if backend is None:
+            raise RuntimeError("no fmt executor configured")
+
         resolved_offset = (
             offset
             if offset is not None
@@ -661,24 +678,51 @@ class FmtService:
             )
         )
 
-        results: list[object] = []
-        for task in plan.tasks:
-            result = executor.execute_task(
+        rendered_items = self.render_plan(
+            plan,
+            offset=resolved_offset,
+            layout=layout,
+            initial_counter=initial_counter,
+            artifact_prefix=f"{result_prefix}.render",
+            store=record and record_rendered,
+        )
+
+        results: list[FmtExecutionReceipt] = []
+        for task, rendered in zip(plan.tasks, rendered_items, strict=True):
+            result = backend.execute_task(
                 self.session,
                 task,
                 plan=plan,
                 offset=resolved_offset,
+                rendered=rendered,
                 **kwargs,
             )
             results.append(result)
 
             if record:
+                self.session.rec.record_observation(
+                    f"{result_prefix}.response.{task.task_index}",
+                    result.response,
+                    domain=RecordDomain.FMT,
+                    source=result.source,
+                    tags=["fmt", "exec", "response"],
+                    metadata={
+                        "dispatch": result.dispatch.value,
+                        "transport_kind": result.transport_kind,
+                        "received": result.response is not None,
+                    },
+                    overwrite=True,
+                )
                 self.session.rec.record_artifact(
                     f"{result_prefix}.task.{task.task_index}",
                     result,
                     domain=RecordDomain.FMT,
-                    source="fmt.execute_plan",
+                    source=result.source,
                     tags=["fmt", "exec"],
+                    metadata={
+                        "dispatch": result.dispatch.value,
+                        "transport_kind": result.transport_kind,
+                    },
                     overwrite=True,
                 )
 

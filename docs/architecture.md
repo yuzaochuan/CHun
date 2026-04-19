@@ -31,6 +31,8 @@
   - `FmtOffset`
   - `FmtOffsetProbeMode`
   - `FmtOffsetProbeResult`
+  - `FmtExecutionMethod`
+  - `FmtExecutionReceipt`
   - `FmtLeak`
   - `FmtWriteRequest`
   - `FmtWriteAtom`
@@ -114,6 +116,17 @@
 - `session.libc_catalog`
 
 本轮收口后，面向后续插件开发的公开入口已经固定在这组字段上；下一阶段应优先复用这些入口，而不是继续新增临时 facade。
+
+## Fmt 子系统现状
+
+`fmt` 现在已经按四段式职责收口：
+
+- probe：负责 offset 探测，并把原始响应 / probe artifact / 最终 fact 分层入库
+- planner：负责把写入意图拆成 `FmtWriteAtom` / `FmtWriteTask`
+- renderer：负责把 task 纯函数化渲染成 `RenderedFmtTask`
+- executor：负责按 transport 能力把 rendered payload 分发出去，并产出 `FmtExecutionReceipt`
+
+其中 executor 不在 service 内缓存状态，也不承担 workflow / replay；blind 场景通过 `BlindReconnectTransport.exchange()` 完成单 task 执行，长连接场景走普通 `sendline()` / `recv()`。
 
 ## Transport 统一原则
 
