@@ -100,6 +100,7 @@ class DummySession:
     def __post_init__(self) -> None:
         self.target = type("Target", (), {"kind": self.kind})()
         self.rec = SimpleNamespace(name="rec")
+        self.fmt = SimpleNamespace(name="fmt")
         self.infer = SimpleNamespace(name="infer")
         self.resolve = SimpleNamespace(name="resolve")
         self.crash = SimpleNamespace(name="crash")
@@ -418,6 +419,67 @@ def test_script_debug_falls_back_to_start_when_gdb_flag_is_off(
 
     assert entry.debug("b *main") is entry
     assert entry.session is session
+
+
+def test_script_fmt_facade_forwards_to_session_and_enables_loginfo_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[dict[str, Any]] = []
+
+    def fake_find_offset(**kwargs: Any) -> str:
+        calls.append(kwargs)
+        return "offset"
+
+    session.fmt = SimpleNamespace(find_offset=fake_find_offset, marker="fmt-service")
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.fmt.marker == "fmt-service"
+    assert entry.fmt.find_offset(max_slots=8) == "offset"
+    assert calls == [{"max_slots": 8, "loginfo": True}]
+
+
+def test_script_fmt_facade_respects_explicit_loginfo_override(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[dict[str, Any]] = []
+
+    def fake_find_offset(**kwargs: Any) -> str:
+        calls.append(kwargs)
+        return "offset"
+
+    session.fmt = SimpleNamespace(find_offset=fake_find_offset)
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.fmt.find_offset(loginfo=False) == "offset"
+    assert calls == [{"loginfo": False}]
 
 
 def test_script_gdb_warns_for_remote_session(

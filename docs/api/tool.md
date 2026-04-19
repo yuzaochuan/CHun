@@ -174,7 +174,8 @@ t.gdb("b *main\nc")
 - `session.gdb_mi`：结构化 GDB/MI 命令
 - `session.resolve`：MemLeak / DynELF / symbol 解析
 - `session.crash`：core dump 分析
-- `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、生成并持久化 `FmtWritePlan`、执行 task 级渲染与 blind-safe task 拆分；offset probe 会把原始响应写 observation、结构化结果写 artifact、最终 offset 写 fact；内置 planner 默认支持按 `BYTE/SHORT/INT/PTR` 做 little-endian 数值切片
+- `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、生成并持久化 `FmtWritePlan`、执行 task 级渲染与 blind-safe task 拆分；offset probe 会把原始响应写 observation、结构化结果写 artifact、最终 offset 写 fact；`find_offset(loginfo=False)` 默认静默，显式打开后会打印命中的 index / token / signature / confidence；内置 planner 默认支持按 `BYTE/SHORT/INT/PTR` 做 little-endian 数值切片
+- `ScriptEntry.fmt`：脚本态 `session.fmt` 语法糖；除常规转发外，`s.fmt.find_offset(...)` 会默认以 `loginfo=True` 打印探测结果，等价于 `s.session.fmt.find_offset(..., loginfo=True)`
 
 ## 示例
 
@@ -199,6 +200,12 @@ print(plan.total_atoms, plan.total_tasks)
 
 rendered = p.fmt.render_plan(plan, offset=6)
 print(rendered[0].payload)
+```
+
+```python
+s = CHun.script("./challenge").start()
+result = s.fmt.find_offset(max_slots=16)
+print(result.index)
 ```
 
 ## 本阶段边界

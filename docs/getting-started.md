@@ -165,7 +165,13 @@ blind = CHun.blind(lambda: object())
 # session.rec.record_fact("libc.base", 0x7F1234500000)
 # plan = session.fmt.plan_writes({"printf@got": "system"})
 # print(plan.total_atoms, plan.total_tasks)
+# offset = session.fmt.find_offset(loginfo=True)
 # rendered = session.fmt.render_plan(plan, offset=6)
+
+# script facade sugar
+# s = CHun.script("./challenge").start()
+# result = s.fmt.find_offset(max_slots=16)  # script mode defaults loginfo=True
+# print(result.index)
 
 # corefile -> crash facts
 # session.crash.analyze("/tmp/core")

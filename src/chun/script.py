@@ -277,7 +277,7 @@ class ScriptEntry:
     @property
     def fmt(self) -> FmtService:
         """访问 session 的 fmt 服务。"""
-        return self.as_session.fmt
+        return _ScriptFmtFacade(self.session.fmt)
 
     def send(self, data: bytes) -> None:
         """转发到当前 `io.send()`。"""
@@ -447,3 +447,19 @@ class ScriptEntry:
 
 
 __all__ = ["ScriptEntry"]
+
+
+class _ScriptFmtFacade:
+    """脚本态 fmt 语法糖：默认打开 offset 探测日志。"""
+
+    def __init__(self, service: FmtService) -> None:
+        self._service = service
+
+    def find_offset(self, **kwargs: Any) -> Any:
+        kwargs.setdefault("loginfo", True)
+        return self._service.find_offset(**kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._service, name)

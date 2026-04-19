@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Mapping, Protocol, Sequence
 
+from ..._compat import log
 from ...core.models import (
     AddressLike,
     FmtEndian,
@@ -255,6 +256,7 @@ class FmtService:
         sep: bytes = b".",
         signature: bytes | None = None,
         store: bool = True,
+        loginfo: bool = False,
         source: str = "fmt.probe",
     ) -> FmtOffsetProbeResult:
         """
@@ -266,7 +268,7 @@ class FmtService:
         if self._prober is None:
             raise RuntimeError("no fmt prober configured")
 
-        return self._prober.find_offset(
+        result = self._prober.find_offset(
             self.session,
             mode=mode,
             max_slots=max_slots,
@@ -276,6 +278,25 @@ class FmtService:
             signature=signature,
             store=store,
             source=source,
+        )
+        if loginfo:
+            self._log_find_offset_result(result)
+        return result
+
+    @staticmethod
+    def _log_find_offset_result(result: FmtOffsetProbeResult) -> None:
+        token = result.matched_token or "<unknown>"
+        window = "?"
+        if result.window_start is not None and result.window_end is not None:
+            window = f"{result.window_start}-{result.window_end}"
+        log.success(
+            "fmt offset found: "
+            f"index={result.index} method={result.method.value} token={token}"
+        )
+        log.info(
+            "fmt offset detail: "
+            f"signature={result.signature!r} sep={result.sep!r} "
+            f"window={window} confidence={result.confidence:.2f}"
         )
 
     # ------------------------------------------------------------------

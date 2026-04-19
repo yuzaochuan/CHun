@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import chun.plugins.fmt.service as fmt_service_mod
 from chun import CHunSession
 from chun.core.models import (
     FactKind,
@@ -336,6 +337,69 @@ def test_fmt_service_find_offset_uses_default_prober() -> None:
     stored = session.rec.get_fact("fmt.offset")
     assert stored is not None
     assert stored.value == 3
+
+
+def test_fmt_service_find_offset_is_silent_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signature = b"CHun"
+    signature_hex = format(int.from_bytes(signature, "little"), "x").encode()
+    session = build_probe_session(b"CHun0xaaa.0xbbb.0x" + signature_hex)
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+    messages: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        fmt_service_mod.log,
+        "success",
+        lambda message: messages.append(("success", message)),
+    )
+    monkeypatch.setattr(
+        fmt_service_mod.log,
+        "info",
+        lambda message: messages.append(("info", message)),
+    )
+
+    result = session.fmt.find_offset()
+
+    assert result.index == 3
+    assert messages == []
+
+
+def test_fmt_service_find_offset_logs_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signature = b"CHun"
+    signature_hex = format(int.from_bytes(signature, "little"), "x").encode()
+    session = build_probe_session(b"CHun0xaaa.0xbbb.0x" + signature_hex)
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+    messages: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        fmt_service_mod.log,
+        "success",
+        lambda message: messages.append(("success", message)),
+    )
+    monkeypatch.setattr(
+        fmt_service_mod.log,
+        "info",
+        lambda message: messages.append(("info", message)),
+    )
+
+    result = session.fmt.find_offset(loginfo=True)
+
+    assert result.index == 3
+    assert messages == [
+        (
+            "success",
+            "fmt offset found: index=3 method=sequential token=0x6e754843",
+        ),
+        (
+            "info",
+            "fmt offset detail: signature=b'CHun' sep=b'.' window=1-32 confidence=0.95",
+        ),
+    ]
     assert session.rec.get_artifact("fmt.offset.probe") is not None
 
 
