@@ -118,9 +118,14 @@ FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而�
 - `FmtWriteRequest`：描述用户层原始写入请求
 - `FmtWriteAtom`：描述最小独立写单元，新增了 `end_address` 便于 payload/executor 做区间判断
 - `FmtWriteTask`：描述一个可独立执行的任务，新增了 `total_atoms`
-- `FmtWritePlan`：描述 service 输出的完整计划，额外暴露 `total_atoms`、`total_tasks` 与 `is_blind_safe`
+- `FmtWritePlan`：描述 service 输出的完整计划。当前它表达的是 CHun 的计划对象，而不是自研 atom 优化器本体；会显式记录 `backend`、`offset`、`data_offset`，并额外暴露 `total_atoms`、`total_tasks` 与 `is_blind_safe`
+- `FmtWriteCandidate`：描述单个 strategy 下的写入候选，包含 `plan`、`rendered_tasks`、`error` 以及若干便于比较的聚合属性
+- `FmtWriteComparison`：描述同一目标/值在多种 strategy 下的对照结果；实现了 `__str__()`，可直接 `print(report)` 得到可读摘要，并支持基于 `buflen/end` 输出 `✅ / ❌ / ❔` 状态
 - `FmtRenderStep`：描述单个 atom 在 renderer 阶段的具体决策，包括 padding、arg index、specifier 与计数器推进
-- `RenderedFmtTask`：描述 renderer 产出的纯字节任务，包含最终 payload、layout、初始/最终计数器
+- `RenderedFmtTask`：描述 renderer 产出的纯字节任务，显式区分 `fmt_bytes`、`data_bytes` 与最终 `payload`，并保留 `backend`、`layout`、初始/最终计数器
+- `FmtExecutionMethod`：描述 executor 最终采用的分发方式，例如 `sendline` 或 `exchange`
+- `FmtExecutionReceipt`：描述一次 task 执行回执，包含 `rendered`、`payload`、`response`、`transport_kind` 与 `dispatch`
+- `FmtExecutionResult`：描述一次完整写执行的聚合结果，包含 `plan`、`receipts`、`responses`、`task_indexes` 与 `total_tasks`
 
 这组 FMT DTO 现在统一采用 `slots=True, frozen=True`。语义上它们是“可缓存、可对比、可入库”的 IR，而不是 service 内部可随手改写的状态对象。为避免出现“dataclass 冻结了但 metadata 还能被偷偷改”的假不可变状态，`metadata` 也会在构造时被冻结。
 
@@ -130,12 +135,34 @@ FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而�
 - `FmtReadMode`
 - `FmtTaskPolicy`
 - `FmtLayoutPolicy`
+- `FmtResultKind`
 
 以及基础别名：
 
 - `AddressLike`
 - `ValueLike`
 - `FmtEndian`
+
+当前 write path 的关键语义差异是：
+
+- `FmtOffset`
+  - 仍然表示最终确认后的 fmt offset fact
+- `FmtWritePlan.offset`
+  - 即 `fmt_offset`
+  - 表示输入缓冲区首个机器字槽位对应的 positional index
+- `FmtWritePlan.data_offset`
+  - 表示用户显式覆盖的尾部地址区首槽位
+  - 若未显式提供，可以保持为 `None`
+- `RenderedFmtTask.data_offset`
+  - 表示该 task 最终收敛后的尾部地址区首槽位
+- `FmtRenderStep.arg_index`
+  - 表示当前 atom 最终命中的 positional index
+
+这让 CHun 可以在保留自己 typed models 的同时，把底层 payload 算法委托给 pwntools，并明确表达：
+
+- `fmt_offset` 是输入缓冲区起始槽位
+- `data_offset` 是 append-address 数据区起始槽位
+- 两者不再被视为天然相等
 
 ## Libc Catalog 模型
 

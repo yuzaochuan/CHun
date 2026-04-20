@@ -3,18 +3,24 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Mapping, Protocol, Sequence
 
+from ..._compat import log
 from ...core.models import (
     AddressLike,
     FmtEndian,
+    FmtExecutionReceipt,
+    FmtExecutionResult,
     FmtLayoutPolicy,
     FmtLeak,
     FmtOffset,
     FmtOffsetProbeMode,
     FmtOffsetProbeResult,
     FmtReadMode,
+    FmtResultKind,
     FmtTargetRef,
     FmtTaskPolicy,
     FmtValueRef,
+    FmtWriteCandidate,
+    FmtWriteComparison,
     FmtWriteAtom,
     FmtWritePlan,
     FmtWriteRequest,
@@ -25,9 +31,19 @@ from ...core.models import (
     RenderedFmtTask,
     ValueLike,
 )
+from .errors import (
+    FmtConfigurationError,
+    FmtExecutionError,
+    FmtOffsetMissingError,
+    FmtReadError,
+    FmtSymbolResolveError,
+    FmtWriteError,
+)
 from .planner import DefaultFmtWritePlanner
+from .readers import DefaultFmtReadExecutor
 from .probes import FmtOffsetProbe as DefaultFmtOffsetProbe
 from .renderer import DefaultFmtTaskRenderer
+from .writers import DefaultFmtPlanExecutor
 
 if TYPE_CHECKING:
     from chun.core.session import CHunSession
@@ -86,6 +102,7 @@ class FmtWritePlanner(Protocol):
         endian: FmtEndian,
         pointer_size: int,
         task_policy: FmtTaskPolicy,
+        **kwargs: object,
     ) -> FmtWritePlan: ...
 
 
@@ -102,8 +119,9 @@ class FmtPlanExecutor(Protocol):
         *,
         plan: FmtWritePlan,
         offset: int,
+        rendered: RenderedFmtTask | None = None,
         **kwargs: object,
-    ) -> object: ...
+    ) -> FmtExecutionReceipt: ...
 
 
 class FmtTaskRenderer(Protocol):
@@ -118,6 +136,7 @@ class FmtTaskRenderer(Protocol):
         *,
         plan: FmtWritePlan,
         offset: int,
+        data_offset: int | None = None,
         layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
         initial_counter: int = 0,
     ) -> RenderedFmtTask: ...
@@ -140,12 +159,18 @@ class FmtService:
         planner: FmtWritePlanner | None = None,
         reader: FmtReadExecutor | None = None,
         renderer: FmtTaskRenderer | None = None,
+        executor: FmtPlanExecutor | None = None,
     ) -> None:
         self.session = session
         self._prober = prober if prober is not None else DefaultFmtOffsetProbe()
         self._planner = planner if planner is not None else DefaultFmtWritePlanner()
-        self._reader = reader
+        self._reader = reader if reader is not None else DefaultFmtReadExecutor()
         self._renderer = renderer if renderer is not None else DefaultFmtTaskRenderer()
+        self._executor = (
+            executor
+            if executor is not None
+            else DefaultFmtPlanExecutor(renderer=self._renderer)
+        )
 
     # ------------------------------------------------------------------
     # public: offset
@@ -164,7 +189,7 @@ class FmtService:
         entry = self.session.rec.get_fact("fmt.offset")
         if entry is None:
             if required:
-                raise RuntimeError("missing fact: fmt.offset")
+                raise FmtOffsetMissingError("missing fact: fmt.offset")
             return None
 
         value = entry.value if hasattr(entry, "value") else entry
@@ -197,7 +222,9 @@ class FmtService:
             model = offset
         elif isinstance(offset, FmtOffsetProbeResult):
             if offset.index is None:
-                raise RuntimeError("probe result does not contain a resolved fmt.offset")
+                raise FmtOffsetMissingError(
+                    "probe result does not contain a resolved fmt.offset"
+                )
             model = FmtOffset(
                 index=offset.index,
                 source=offset.source,
@@ -255,6 +282,7 @@ class FmtService:
         sep: bytes = b".",
         signature: bytes | None = None,
         store: bool = True,
+        loginfo: bool = False,
         source: str = "fmt.probe",
     ) -> FmtOffsetProbeResult:
         """
@@ -264,9 +292,9 @@ class FmtService:
         3. 返回结构化 probe result。
         """
         if self._prober is None:
-            raise RuntimeError("no fmt prober configured")
+            raise FmtConfigurationError("no fmt prober configured")
 
-        return self._prober.find_offset(
+        result = self._prober.find_offset(
             self.session,
             mode=mode,
             max_slots=max_slots,
@@ -277,6 +305,29 @@ class FmtService:
             store=store,
             source=source,
         )
+        if loginfo:
+            self._log_find_offset_result(result)
+        return result
+
+    @staticmethod
+    def _log_find_offset_result(result: FmtOffsetProbeResult) -> None:
+        token = result.matched_token or "<unknown>"
+        window = "?"
+        if result.window_start is not None and result.window_end is not None:
+            window = f"{result.window_start}-{result.window_end}"
+        log.success(
+            "fmt offset found: "
+            f"index={result.index} method={result.method.value} token={token}"
+        )
+        log.info(
+            "fmt offset detail: "
+            f"signature={result.signature!r} sep={result.sep!r} "
+            f"window={window} confidence={result.confidence:.2f}"
+        )
+
+    @staticmethod
+    def _log_compare_write_result(result: FmtWriteComparison) -> None:
+        log.info(str(result))
 
     # ------------------------------------------------------------------
     # public: symbol/value resolution
@@ -357,7 +408,7 @@ class FmtService:
         """
         backend = reader or self._reader
         if backend is None:
-            raise RuntimeError("no fmt read backend configured")
+            raise FmtConfigurationError("no fmt read backend configured")
 
         resolved_target = self.resolve_target(target)
         resolved_offset = (
@@ -405,6 +456,105 @@ class FmtService:
         """
         return self.plan_writes({target: value}, **kwargs)
 
+    def write(
+        self,
+        target: AddressLike,
+        value: ValueLike,
+        **kwargs: object,
+    ) -> FmtExecutionResult:
+        """单目标高层写接口：内部自动规划并执行。"""
+        return self.writes({target: value}, **kwargs)
+
+    def compare_write(
+        self,
+        target: AddressLike,
+        value: ValueLike,
+        *,
+        strategies: Sequence[FmtWriteStrategy | str] = (
+            FmtWriteStrategy.AUTO,
+            FmtWriteStrategy.BYTE,
+            FmtWriteStrategy.SHORT,
+            FmtWriteStrategy.INT,
+        ),
+        offset: int | None = None,
+        task_policy: FmtTaskPolicy = FmtTaskPolicy.PACKED,
+        data_offset: int | None = None,
+        buflen: int | None = None,
+        end: bytes | None = None,
+        show_hex: bool = False,
+        layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
+        initial_counter: int = 0,
+        loginfo: bool = False,
+        **kwargs: object,
+    ) -> FmtWriteComparison:
+        resolved_target = self.resolve_target(target)
+        resolved_value = self.resolve_value(value)
+        normalized_strategies = tuple(
+            self._normalize_write_strategy(item) for item in strategies
+        )
+
+        candidates: list[FmtWriteCandidate] = []
+        for strategy in normalized_strategies:
+            try:
+                plan = self.plan_write(
+                    resolved_target.address,
+                    resolved_value.value,
+                    strategy=strategy,
+                    offset=offset,
+                    task_policy=task_policy,
+                    data_offset=data_offset,
+                    store=False,
+                    **kwargs,
+                )
+                rendered_tasks = self.render_plan(
+                    plan,
+                    offset=offset,
+                    data_offset=data_offset,
+                    layout=layout,
+                    initial_counter=initial_counter,
+                    store=False,
+                )
+                candidates.append(
+                    FmtWriteCandidate(
+                        strategy=strategy,
+                        plan=plan,
+                        rendered_tasks=rendered_tasks,
+                        metadata={
+                            "layout": layout.value,
+                            "offset": plan.offset,
+                        },
+                    )
+                )
+            except Exception as exc:
+                candidates.append(
+                    FmtWriteCandidate(
+                        strategy=strategy,
+                        error=f"{type(exc).__name__}: {exc}",
+                        metadata={"layout": layout.value},
+                    )
+                )
+
+        result = FmtWriteComparison(
+            target=resolved_target,
+            value=resolved_value,
+            candidates=tuple(candidates),
+            metadata={
+                "requested_strategies": tuple(
+                    strategy.value for strategy in normalized_strategies
+                ),
+                "offset": offset,
+                "task_policy": task_policy.value,
+                "data_offset": data_offset,
+                "buflen": buflen,
+                "end": end,
+                "show_hex": show_hex,
+                "layout": layout.value,
+            },
+        )
+        if loginfo:
+            self._log_compare_write_result(result)
+        return result
+
     def plan_writes(
         self,
         writes: Mapping[AddressLike, ValueLike] | Sequence[FmtWriteRequest],
@@ -414,6 +564,15 @@ class FmtService:
         value_bits: int | None = None,
         task_policy: FmtTaskPolicy = FmtTaskPolicy.PACKED,
         offset: int | None = None,
+        data_offset: int | None = None,
+        backend: str = "pwntools",
+        write_size: str | None = None,
+        write_size_max: str = "long",
+        overflows: int = 16,
+        backend_strategy: str = "small",
+        badbytes: bytes | bytearray | Sequence[int] = (),
+        no_dollars: bool = False,
+        numbwritten: int = 0,
         artifact_name: str | None = None,
         store: bool = True,
     ) -> FmtWritePlan:
@@ -440,6 +599,7 @@ class FmtService:
             if offset is not None
             else (current_offset_model.index if current_offset_model else None)
         )
+        current_data_offset = data_offset
 
         requests = self._normalize_requests(
             writes,
@@ -447,16 +607,33 @@ class FmtService:
             chunk_width=chunk_width,
             value_bits=value_bits,
         )
-        base_plan = self._planner.plan(
-            requests,
-            bits=arch.bits,
-            endian=arch.endian,
-            pointer_size=arch.pointer_size,
-            task_policy=task_policy,
-        )
+        try:
+            base_plan = self._planner.plan(
+                requests,
+                bits=arch.bits,
+                endian=arch.endian,
+                pointer_size=arch.pointer_size,
+                task_policy=task_policy,
+                backend=backend,
+                write_size=write_size
+                or self._infer_write_size(strategy=strategy, chunk_width=chunk_width),
+                write_size_max=write_size_max,
+                overflows=overflows,
+                backend_strategy=backend_strategy,
+                badbytes=badbytes,
+                no_dollars=no_dollars,
+                numbwritten=numbwritten,
+                data_offset=current_data_offset,
+                fmt_offset=current_offset,
+            )
+        except FmtWriteError:
+            raise
+        except Exception as exc:
+            raise FmtWriteError("fmt write planning failed") from exc
         plan = replace(
             base_plan,
             offset=current_offset,
+            data_offset=current_data_offset,
             metadata={
                 **dict(base_plan.metadata),
                 "artifact_name": artifact_name,
@@ -464,6 +641,9 @@ class FmtService:
                 "endian": arch.endian,
                 "pointer_size": arch.pointer_size,
                 "request_count": len(requests),
+                "backend": backend,
+                "fmt_offset": current_offset,
+                "data_offset": current_data_offset,
             },
         )
 
@@ -482,11 +662,74 @@ class FmtService:
                     "request_count": len(requests),
                     "atom_count": plan.total_atoms,
                     "task_count": plan.total_tasks,
+                    "backend": plan.backend,
+                    "fmt_offset": plan.offset,
+                    "data_offset": plan.data_offset,
                 },
                 overwrite=True,
             )
 
         return plan
+
+    def writes(
+        self,
+        writes: Mapping[AddressLike, ValueLike] | Sequence[FmtWriteRequest],
+        *,
+        strategy: FmtWriteStrategy = FmtWriteStrategy.AUTO,
+        chunk_width: int | None = None,
+        value_bits: int | None = None,
+        task_policy: FmtTaskPolicy = FmtTaskPolicy.PACKED,
+        offset: int | None = None,
+        data_offset: int | None = None,
+        backend: str = "pwntools",
+        write_size: str | None = None,
+        write_size_max: str = "long",
+        overflows: int = 16,
+        backend_strategy: str = "small",
+        badbytes: bytes | bytearray | Sequence[int] = (),
+        no_dollars: bool = False,
+        numbwritten: int = 0,
+        layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
+        initial_counter: int = 0,
+        artifact_name: str | None = "fmt.write.plan",
+        result_prefix: str = "fmt.write",
+        store: bool = True,
+        record_rendered: bool = True,
+        executor: FmtPlanExecutor | None = None,
+        **kwargs: object,
+    ) -> FmtExecutionResult:
+        """批量高层写接口：plan -> execute 的 façade。"""
+        plan = self.plan_writes(
+            writes,
+            strategy=strategy,
+            chunk_width=chunk_width,
+            value_bits=value_bits,
+            task_policy=task_policy,
+            offset=offset,
+            data_offset=data_offset,
+            backend=backend,
+            write_size=write_size,
+            write_size_max=write_size_max,
+            overflows=overflows,
+            backend_strategy=backend_strategy,
+            badbytes=badbytes,
+            no_dollars=no_dollars,
+            numbwritten=numbwritten,
+            artifact_name=artifact_name,
+            store=store,
+        )
+        return self.execute_plan(
+            plan,
+            executor=executor,
+            offset=offset,
+            data_offset=data_offset,
+            layout=layout,
+            initial_counter=initial_counter,
+            result_prefix=result_prefix,
+            record=store,
+            record_rendered=record_rendered,
+            **kwargs,
+        )
 
     def split_plan(
         self,
@@ -523,6 +766,7 @@ class FmtService:
         *,
         plan: FmtWritePlan,
         offset: int | None = None,
+        data_offset: int | None = None,
         layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
         initial_counter: int = 0,
         artifact_name: str | None = None,
@@ -537,10 +781,16 @@ class FmtService:
                 else self._read_fmt_offset()
             )
         )
+        resolved_data_offset = (
+            data_offset
+            if data_offset is not None
+            else plan.data_offset
+        )
         rendered = self._renderer.render(
             task,
             plan=plan,
             offset=resolved_offset,
+            data_offset=resolved_data_offset,
             layout=layout,
             initial_counter=initial_counter,
         )
@@ -562,6 +812,7 @@ class FmtService:
         plan: FmtWritePlan,
         *,
         offset: int | None = None,
+        data_offset: int | None = None,
         layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
         initial_counter: int = 0,
         artifact_prefix: str = "fmt.render",
@@ -576,6 +827,11 @@ class FmtService:
                 else self._read_fmt_offset()
             )
         )
+        resolved_data_offset = (
+            data_offset
+            if data_offset is not None
+            else plan.data_offset
+        )
 
         rendered: list[RenderedFmtTask] = []
         current_counter = initial_counter
@@ -584,6 +840,7 @@ class FmtService:
                 task,
                 plan=plan,
                 offset=resolved_offset,
+                data_offset=resolved_data_offset,
                 layout=layout,
                 initial_counter=(
                     current_counter if not task.independent else initial_counter
@@ -613,12 +870,16 @@ class FmtService:
         self,
         plan: FmtWritePlan,
         *,
-        executor: FmtPlanExecutor,
+        executor: FmtPlanExecutor | None = None,
         offset: int | None = None,
+        data_offset: int | None = None,
+        layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
+        initial_counter: int = 0,
         result_prefix: str = "fmt.exec",
         record: bool = True,
+        record_rendered: bool = True,
         **kwargs: object,
-    ) -> list[object]:
+    ) -> FmtExecutionResult:
         """
         注意：
         这里不是 payload 算法实现层，而是 orchestration 层。
@@ -626,10 +887,15 @@ class FmtService:
         逻辑：
         1. offset 优先级：
            arg > plan.offset > registry(fmt.offset)
-        2. 对 plan.tasks 逐个调用 executor.execute_task(...)
-        3. 每个 task 的结果写 artifact
-        4. 返回结果列表
+        2. 先 render_plan() 生成 RenderedFmtTask
+        3. 对每个 rendered task 调用 executor.execute_task(...)
+        4. 原始响应写 observation，结构化结果写 artifact
+        5. 返回结构化回执列表
         """
+        backend = executor or self._executor
+        if backend is None:
+            raise FmtConfigurationError("no fmt executor configured")
+
         resolved_offset = (
             offset
             if offset is not None
@@ -639,29 +905,81 @@ class FmtService:
                 else self._read_fmt_offset()
             )
         )
+        resolved_data_offset = (
+            data_offset
+            if data_offset is not None
+            else plan.data_offset
+        )
 
-        results: list[object] = []
-        for task in plan.tasks:
-            result = executor.execute_task(
-                self.session,
-                task,
-                plan=plan,
-                offset=resolved_offset,
-                **kwargs,
-            )
+        rendered_items = self.render_plan(
+            plan,
+            offset=resolved_offset,
+            data_offset=resolved_data_offset,
+            layout=layout,
+            initial_counter=initial_counter,
+            artifact_prefix=f"{result_prefix}.render",
+            store=record and record_rendered,
+        )
+
+        results: list[FmtExecutionReceipt] = []
+        for task, rendered in zip(plan.tasks, rendered_items, strict=True):
+            try:
+                result = backend.execute_task(
+                    self.session,
+                    task,
+                    plan=plan,
+                    offset=resolved_offset,
+                    rendered=rendered,
+                    **kwargs,
+                )
+            except FmtWriteError:
+                raise
+            except Exception as exc:
+                raise FmtExecutionError(
+                    f"fmt task execution failed: task_index={task.task_index}"
+                ) from exc
             results.append(result)
 
             if record:
+                self.session.rec.record_observation(
+                    f"{result_prefix}.response.{task.task_index}",
+                    result.response,
+                    domain=RecordDomain.FMT,
+                    source=result.source,
+                    tags=["fmt", "exec", "response"],
+                    metadata={
+                        "dispatch": result.dispatch.value,
+                        "transport_kind": result.transport_kind,
+                        "received": result.response is not None,
+                    },
+                    overwrite=True,
+                )
                 self.session.rec.record_artifact(
                     f"{result_prefix}.task.{task.task_index}",
                     result,
                     domain=RecordDomain.FMT,
-                    source="fmt.execute_plan",
+                    source=result.source,
                     tags=["fmt", "exec"],
+                    metadata={
+                        "dispatch": result.dispatch.value,
+                        "transport_kind": result.transport_kind,
+                    },
                     overwrite=True,
                 )
 
-        return results
+        return FmtExecutionResult(
+            kind=FmtResultKind.EXECUTION,
+            plan=plan,
+            receipts=tuple(results),
+            offset=resolved_offset,
+            result_prefix=result_prefix,
+            source="fmt.execute_plan",
+            metadata={
+                "layout": layout.value,
+                "initial_counter": initial_counter,
+                "data_offset": resolved_data_offset,
+            },
+        )
 
     def blind(self) -> "BlindFmtService":
         """
@@ -705,11 +1023,35 @@ class FmtService:
 
         return _ArchContext(bits=64, endian="little", pointer_size=8)
 
+    @staticmethod
+    def _infer_write_size(
+        *,
+        strategy: FmtWriteStrategy,
+        chunk_width: int | None,
+    ) -> str:
+        if chunk_width in (1, 2, 4, 8):
+            return {1: "byte", 2: "short", 4: "int", 8: "long"}[chunk_width]
+        mapping = {
+            FmtWriteStrategy.BYTE: "byte",
+            FmtWriteStrategy.SHORT: "short",
+            FmtWriteStrategy.INT: "int",
+            FmtWriteStrategy.PTR: "long",
+        }
+        return mapping.get(strategy, "short")
+
+    @staticmethod
+    def _normalize_write_strategy(
+        strategy: FmtWriteStrategy | str,
+    ) -> FmtWriteStrategy:
+        if isinstance(strategy, FmtWriteStrategy):
+            return strategy
+        return FmtWriteStrategy(str(strategy).lower())
+
     def _read_fmt_offset(self) -> int:
         """统一读取 fmt offset fact。"""
         entry = self.session.rec.get_fact("fmt.offset")
         if entry is None:
-            raise RuntimeError("missing fact: fmt.offset")
+            raise FmtOffsetMissingError("missing fact: fmt.offset")
 
         value = entry.value if hasattr(entry, "value") else entry
         return int(value)
@@ -720,7 +1062,12 @@ class FmtService:
             resolved = self._resolve_from_object(bound_elf, name)
             if resolved is not None:
                 return resolved
-        return int(self.session.resolve.symbol(name))
+        try:
+            return int(self.session.resolve.symbol(name))
+        except Exception as exc:
+            raise FmtSymbolResolveError(
+                f"unable to resolve fmt target symbol: {name}"
+            ) from exc
 
     def _resolve_value_symbol(self, name: str) -> int:
         last_exc: Exception | None = None
@@ -737,8 +1084,10 @@ class FmtService:
                 return resolved
 
         if last_exc is not None:
-            raise last_exc
-        raise RuntimeError(f"unable to resolve fmt value symbol: {name}")
+            raise FmtSymbolResolveError(
+                f"unable to resolve fmt value symbol: {name}"
+            ) from last_exc
+        raise FmtSymbolResolveError(f"unable to resolve fmt value symbol: {name}")
 
     def _resolve_from_object(
         self,

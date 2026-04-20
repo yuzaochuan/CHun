@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from ...core.models import (
     AddressLike,
     FmtEndian,
+    FmtExecutionMethod,
+    FmtExecutionResult,
+    FmtExecutionReceipt,
+    FmtWriteCandidate,
+    FmtWriteComparison,
     FmtLayoutPolicy,
     FmtRenderSpecifier,
     FmtRenderStep,
@@ -15,6 +20,7 @@ from ...core.models import (
     FmtOffsetProbeMode,
     FmtOffsetProbeResult,
     FmtReadMode,
+    FmtResultKind,
     FmtTargetRef,
     FmtTaskPolicy,
     FmtValueRef,
@@ -28,9 +34,21 @@ from ...core.models import (
     ValueLike,
 )
 from .blind import BlindFmtService
+from .errors import (
+    FmtConfigurationError,
+    FmtDataOffsetResolutionError,
+    FmtError,
+    FmtExecutionError,
+    FmtOffsetMissingError,
+    FmtReadError,
+    FmtSymbolResolveError,
+    FmtWriteError,
+)
 from .planner import DefaultFmtWritePlanner
 from .probes import FmtOffsetNotFoundError, FmtOffsetProbe, FmtOffsetProbeError
+from .readers import DefaultFmtReadExecutor
 from .renderer import DefaultFmtTaskRenderer
+from .writers import DefaultFmtPlanExecutor
 from .service import (
     FmtPlanExecutor,
     FmtReadExecutor,
@@ -51,10 +69,21 @@ class FmtCapability:
 __all__ = [
     "AddressLike",
     "BlindFmtService",
+    "DefaultFmtReadExecutor",
+    "DefaultFmtPlanExecutor",
     "DefaultFmtWritePlanner",
     "DefaultFmtTaskRenderer",
     "FmtCapability",
+    "FmtConfigurationError",
+    "FmtDataOffsetResolutionError",
     "FmtEndian",
+    "FmtError",
+    "FmtExecutionMethod",
+    "FmtExecutionResult",
+    "FmtExecutionReceipt",
+    "FmtWriteCandidate",
+    "FmtWriteComparison",
+    "FmtExecutionError",
     "FmtLayoutPolicy",
     "FmtRenderSpecifier",
     "FmtRenderStep",
@@ -63,12 +92,16 @@ __all__ = [
     "FmtOffsetProbeMode",
     "FmtOffsetProbeResult",
     "FmtOffsetNotFoundError",
+    "FmtOffsetMissingError",
     "FmtOffsetProbe",
     "FmtOffsetProbeError",
     "FmtPlanExecutor",
     "FmtReadExecutor",
+    "FmtReadError",
     "FmtReadMode",
+    "FmtResultKind",
     "FmtService",
+    "FmtSymbolResolveError",
     "FmtTargetRef",
     "FmtTaskPolicy",
     "FmtTaskRenderer",
@@ -78,6 +111,7 @@ __all__ = [
     "FmtWritePlan",
     "FmtWritePlanner",
     "FmtWriteRequest",
+    "FmtWriteError",
     "FmtWriteStrategy",
     "FmtWriteTask",
     "RenderedFmtTask",

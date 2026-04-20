@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from ...core.models import FmtTaskPolicy, FmtWritePlan
+from ...core.models import (
+    FmtExecutionResult,
+    FmtTaskPolicy,
+    FmtWriteComparison,
+    FmtWritePlan,
+)
 
 
 class BlindFmtService:
@@ -20,6 +25,23 @@ class BlindFmtService:
         kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
         return self.base.plan_writes(writes, **kwargs)
 
+    def write(self, target: object, value: object, **kwargs: object) -> FmtExecutionResult:
+        kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
+        return self.base.write(target, value, **kwargs)
+
+    def writes(self, writes: object, **kwargs: object) -> FmtExecutionResult:
+        kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
+        return self.base.writes(writes, **kwargs)
+
+    def compare_write(
+        self,
+        target: object,
+        value: object,
+        **kwargs: object,
+    ) -> FmtWriteComparison:
+        kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
+        return self.base.compare_write(target, value, **kwargs)
+
     def split_plan(
         self,
         plan: FmtWritePlan,
@@ -29,7 +51,7 @@ class BlindFmtService:
     ) -> FmtWritePlan:
         return self.base.split_plan(plan, task_policy=task_policy, **kwargs)
 
-    def execute_plan(self, plan: FmtWritePlan, **kwargs: object) -> list[object]:
+    def execute_plan(self, plan: FmtWritePlan, **kwargs: object) -> FmtExecutionResult:
         if plan.task_policy != FmtTaskPolicy.BY_ATOM:
             plan = self.base.split_plan(plan, task_policy=FmtTaskPolicy.BY_ATOM)
         return self.base.execute_plan(plan, **kwargs)

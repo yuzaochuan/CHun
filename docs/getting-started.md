@@ -165,7 +165,18 @@ blind = CHun.blind(lambda: object())
 # session.rec.record_fact("libc.base", 0x7F1234500000)
 # plan = session.fmt.plan_writes({"printf@got": "system"})
 # print(plan.total_atoms, plan.total_tasks)
+# offset = session.fmt.find_offset(loginfo=True)
 # rendered = session.fmt.render_plan(plan, offset=6)
+# result = session.fmt.execute_plan(plan, offset=6)
+# print(result.responses[0])
+# leak = session.fmt.read(0x404040, size=8, mode="raw", offset=6)
+# ptr = session.fmt.read(0x0, mode="pointer", offset=6, fmt="%6$p", append_target=False, recv_until=None, strict_terminator=False)
+# result = session.fmt.write("printf@got", "system", strategy="short", offset=6)
+
+# script facade sugar
+# s = CHun.script("./challenge").start()
+# result = s.fmt.find_offset(max_slots=16)  # script mode defaults loginfo=True
+# print(result.index)
 
 # corefile -> crash facts
 # session.crash.analyze("/tmp/core")
@@ -173,5 +184,5 @@ blind = CHun.blind(lambda: object())
 
 ## 当前阶段边界
 
-- 已落地：session 入口、transport、registry、最小 inference、debug/resolve/crash bridge、fmt 计划/记录层
-- 暂未实现：fmt payload/executor 细节、heap/template 主体与 pwngdb/pwndbg 深集成
+- 已落地：session 入口、transport、registry、最小 inference、debug/resolve/crash bridge、fmt 探测/规划/渲染/执行链
+- 暂未实现：heap/template 主体与 pwngdb/pwndbg 深集成

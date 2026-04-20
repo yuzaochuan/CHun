@@ -94,7 +94,7 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - `CHun.http(base_url, *, headers=None, timeout=None, follow_redirects=True, verify=True, client_factory=None)`
 - `CHun.websocket(ws_url, *, headers=None, timeout=None, connect_timeout=None, connection_factory=None)`
 - `CHun.blind(connection_factory, *, timeout=None)`
-- `CHun.script(binary, *, host=None, port=None, libc=None, ld=None, argv=None, env=None, cwd=None, timeout=None, log_level="debug", terminal=("tmux", "splitw", "-h"))`
+- `CHun.script(binary, *, host=None, port=None, libc=None, ld=None, argv=None, env=None, cwd=None, timeout=None, log_level="debug", terminal=("tmux", "splitw", "-h", "-d"))`
 
 ## `CHun.script()`
 
@@ -174,7 +174,8 @@ t.gdb("b *main\nc")
 - `session.gdb_mi`：结构化 GDB/MI 命令
 - `session.resolve`：MemLeak / DynELF / symbol 解析
 - `session.crash`：core dump 分析
-- `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、生成并持久化 `FmtWritePlan`、执行 task 级渲染与 blind-safe task 拆分；offset probe 会把原始响应写 observation、结构化结果写 artifact、最终 offset 写 fact；内置 planner 默认支持按 `BYTE/SHORT/INT/PTR` 做 little-endian 数值切片
+- `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、提供重构后的 read 子系统、生成并持久化 `FmtWritePlan`、执行 task 级渲染与默认 executor 分发；写路径内部采用“CHun 语义层 + pwntools backend”两层架构，默认把 atom 生成、排序与 `fmt/data` 拆分委托给 `pwnlib.fmtstr`，同时继续保留 CHun 的 typed models、registry 回写与 transport orchestration；`read()` 默认走“内存字符串泄漏” primitive，但也支持通过 `fmt=`、`append_target=`、`recv_until=` 覆盖 payload 与捕获边界；高层 `write()` / `writes()` / `execute_plan()` 会返回聚合后的 `FmtExecutionResult`，内部收纳 `receipts`、`responses` 与 `task_indexes`；执行时会按 transport 类型选择 `sendline` 或 blind `exchange`，同时把原始响应写 observation、把 `FmtExecutionReceipt` 写 artifact；write path 现在显式区分 `offset` 与 `data_offset`；缺 offset、符号解析失败、读写分发失败现在都会抛出明确的 fmt 异常，而不是裸 `RuntimeError`；`find_offset(loginfo=False)` 默认静默，显式打开后会打印命中的 index / token / signature / confidence
+- `ScriptEntry.fmt`：脚本态 `session.fmt` 语法糖；除常规转发外，`s.fmt.find_offset(...)` 会默认以 `loginfo=True` 打印探测结果，等价于 `s.session.fmt.find_offset(..., loginfo=True)`
 
 ## 示例
 
@@ -199,9 +200,38 @@ print(plan.total_atoms, plan.total_tasks)
 
 rendered = p.fmt.render_plan(plan, offset=6)
 print(rendered[0].payload)
+
+result = p.fmt.execute_plan(plan, offset=6)
+print(result.responses[0])
+```
+
+```python
+s = CHun.script("./challenge").start()
+result = s.fmt.find_offset(max_slots=16)
+print(result.index)
+```
+
+```python
+leak = p.fmt.read(0x404040, size=8, mode="raw", offset=6)
+print(leak.raw)
+
+ptr = p.fmt.read(
+    0x0,
+    size=8,
+    mode="pointer",
+    offset=6,
+    fmt="%6$p",
+    append_target=False,
+    recv_until=None,
+    strict_terminator=False,
+)
+print(hex(ptr.decoded))
+
+result = p.fmt.write("printf@got", "system", strategy="short", offset=6)
+print(result.total_tasks, result.responses[0])
 ```
 
 ## 本阶段边界
 
-- 已完成：session/runtime 入口、registry 挂接、最小 inference、debug/resolve/crash bridge、fmt 计划层
-- 未完成：fmt payload/executor 细节、heap / tpl 子系统，以及 pwngdb/pwndbg 深集成
+- 已完成：session/runtime 入口、registry 挂接、最小 inference、debug/resolve/crash bridge、fmt 探测/规划/渲染/执行链
+- 未完成：heap / tpl 子系统，以及 pwngdb/pwndbg 深集成

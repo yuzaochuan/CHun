@@ -13,7 +13,14 @@ from .bridges.gdb import PwntoolsGdbBridge
 from .core.analysis import CorefileAnalyzer
 from .core.errors import TransportConfigError
 from .core.inference import InferenceService
-from .core.models import RecordDomain, TargetSpec
+from .core.models import (
+    AddressLike,
+    FmtTaskPolicy,
+    FmtWriteStrategy,
+    RecordDomain,
+    TargetSpec,
+    ValueLike,
+)
 from .core.registry import EvidenceRegistry
 from .core.resolve import ResolveService
 from .plugins.fmt import FmtService
@@ -22,7 +29,7 @@ from .transports.pwntools_tube import PwntoolsTubeTransport
 if TYPE_CHECKING:
     from .core.session import CHunSession
 
-DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h")
+DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h", "-d")
 
 
 class ScriptEntry:
@@ -277,7 +284,7 @@ class ScriptEntry:
     @property
     def fmt(self) -> FmtService:
         """访问 session 的 fmt 服务。"""
-        return self.as_session.fmt
+        return _ScriptFmtFacade(self.session.fmt)
 
     def send(self, data: bytes) -> None:
         """转发到当前 `io.send()`。"""
@@ -447,3 +454,149 @@ class ScriptEntry:
 
 
 __all__ = ["ScriptEntry"]
+
+
+class _ScriptFmtWriteAction:
+    """脚本态 fmt.write(...) 的延迟门面。"""
+
+    def __init__(
+        self,
+        service: FmtService,
+        *,
+        target: AddressLike,
+        value: ValueLike,
+        strategy: FmtWriteStrategy,
+        offset: int | None,
+        task_policy: FmtTaskPolicy,
+        data_offset: int | None,
+        buflen: int | None,
+        end: bytes | None,
+    ) -> None:
+        self._service = service
+        self._target = target
+        self._value = value
+        self._strategy = strategy
+        self._offset = offset
+        self._task_policy = task_policy
+        self._data_offset = data_offset
+        self._buflen = buflen
+        self._end = end
+
+    def info(
+        self,
+        *,
+        strategies: Sequence[FmtWriteStrategy | str] = (
+            FmtWriteStrategy.AUTO,
+            FmtWriteStrategy.BYTE,
+            FmtWriteStrategy.SHORT,
+            FmtWriteStrategy.INT,
+        ),
+        show_hex: bool = False,
+    ) -> Any:
+        return self._service.compare_write(
+            self._target,
+            self._value,
+            strategies=strategies,
+            offset=self._offset,
+            task_policy=self._task_policy,
+            data_offset=self._data_offset,
+            buflen=self._buflen,
+            end=self._end,
+            show_hex=show_hex,
+            loginfo=True,
+        )
+
+    def send(self) -> Any:
+        return self._service.write(
+            self._target,
+            self._value,
+            strategy=self._strategy,
+            offset=self._offset,
+            task_policy=self._task_policy,
+            data_offset=self._data_offset,
+            end=self._end,
+        )
+
+
+class _ScriptFmtFacade:
+    """脚本态 fmt 语法糖：默认打开 offset 探测日志。"""
+
+    def __init__(self, service: FmtService) -> None:
+        self._service = service
+
+    def find_offset(self, **kwargs: Any) -> Any:
+        kwargs.setdefault("loginfo", True)
+        return self._service.find_offset(**kwargs)
+
+    def write(
+        self,
+        target: AddressLike,
+        value: ValueLike,
+        *,
+        strategy: FmtWriteStrategy | str = FmtWriteStrategy.AUTO,
+        offset: int | None = None,
+        task_policy: FmtTaskPolicy | str = FmtTaskPolicy.PACKED,
+        data_offset: int | None = None,
+        buflen: int | None = None,
+        end: bytes | None = b"\n",
+    ) -> _ScriptFmtWriteAction:
+        return _ScriptFmtWriteAction(
+            self._service,
+            target=target,
+            value=value,
+            strategy=self._normalize_strategy(strategy),
+            offset=offset,
+            task_policy=self._normalize_task_policy(task_policy),
+            data_offset=data_offset,
+            buflen=buflen,
+            end=end,
+        )
+
+    def compare_write(
+        self,
+        target: AddressLike,
+        value: ValueLike,
+        *,
+        strategies: Sequence[FmtWriteStrategy | str] = (
+            FmtWriteStrategy.AUTO,
+            FmtWriteStrategy.BYTE,
+            FmtWriteStrategy.SHORT,
+            FmtWriteStrategy.INT,
+        ),
+        offset: int | None = None,
+        task_policy: FmtTaskPolicy | str = FmtTaskPolicy.PACKED,
+        data_offset: int | None = None,
+        buflen: int | None = None,
+        end: bytes | None = b"\n",
+        show_hex: bool = False,
+        loginfo: bool = True,
+    ) -> Any:
+        return self._service.compare_write(
+            target,
+            value,
+            strategies=strategies,
+            offset=offset,
+            task_policy=self._normalize_task_policy(task_policy),
+            data_offset=data_offset,
+            buflen=buflen,
+            end=end,
+            show_hex=show_hex,
+            loginfo=loginfo,
+        )
+
+    @staticmethod
+    def _normalize_strategy(strategy: FmtWriteStrategy | str) -> FmtWriteStrategy:
+        if isinstance(strategy, FmtWriteStrategy):
+            return strategy
+        return FmtWriteStrategy(str(strategy).lower())
+
+    @staticmethod
+    def _normalize_task_policy(policy: FmtTaskPolicy | str) -> FmtTaskPolicy:
+        if isinstance(policy, FmtTaskPolicy):
+            return policy
+        return FmtTaskPolicy(str(policy).lower())
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._service, name)
