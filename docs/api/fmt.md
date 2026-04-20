@@ -35,6 +35,16 @@
 - `read()`
 - `write()` / `writes()`
 
+写路径内部现在采用“两层架构”：
+
+- CHun 语义层
+  - 保留 typed models、service、registry 回写和 execution orchestration
+- payload backend 层
+  - 默认使用 pwntools `pwnlib.fmtstr`
+  - 负责 atom 生成、排序和 `fmt/data` 拆分
+
+因此，`planner` / `renderer` 当前更像 backend 的 CHun 适配层，而不是继续手写 fmt payload 核心算法。
+
 ## Offset
 
 ### `find_offset()`
@@ -195,6 +205,26 @@ print(plan.total_atoms, plan.total_tasks)
 
 返回值是 `FmtWritePlan`。
 
+默认 backend 是 `pwntools`。当前写路径需要明确区分两个偏移概念：
+
+- `offset`
+  - 格式串本身使用的 fmt 参数偏移
+- `data_offset`
+  - 追加到 payload 尾部的地址数据块在参数表中的首槽位
+
+在经典 `fmt + packed_addresses` 场景里，这两个值经常相同；但 CHun 不再把它们视为天然等价，而是显式保存在 `FmtWritePlan` 和 `RenderedFmtTask` 中。
+
+`plan_writes()` 支持的 backend 侧关键参数包括：
+
+- `backend="pwntools"`：默认 backend
+- `backend="native"`：实验性 fallback
+- `write_size`
+- `write_size_max`
+- `overflows`
+- `badbytes`
+- `no_dollars`
+- `numbwritten`
+
 ### `render_task()` / `render_plan()`
 
 这两组接口只负责渲染，不发送。
@@ -208,6 +238,14 @@ print(rendered[0].payload)
 
 - `RenderedFmtTask`
 - `tuple[RenderedFmtTask, ...]`
+
+对于 `pwntools` backend，渲染结果会显式区分：
+
+- `fmt_bytes`
+- `data_bytes`
+- `payload`
+
+其中 `payload == fmt_bytes + data_bytes`。这让 CHun 继续保留自己的 typed result，同时稳定映射 pwntools `fmtstr_split()` 的语义。
 
 ### `execute_plan()`
 
@@ -271,6 +309,15 @@ print(result.responses[0])
   - 单 task 执行回执
 - `FmtExecutionResult`
   - 一次完整写执行的聚合结果
+
+和写路径 backend 重构直接相关的字段有：
+
+- `FmtWritePlan.backend`
+- `FmtWritePlan.offset`
+- `FmtWritePlan.data_offset`
+- `RenderedFmtTask.fmt_bytes`
+- `RenderedFmtTask.data_bytes`
+- `RenderedFmtTask.backend`
 
 如果你只关心“脚本里怎么继续用”，建议记住下面这个层级：
 
@@ -338,3 +385,10 @@ Future work：
 - 自动回到同一输入点
 - 更强的 blind exploit orchestration
 - 更细的 leak primitive 分层
+
+需要特别注意的边界：
+
+- `read()` 的 offset 语义仍然是“当前读 primitive 使用的参数槽位”
+- `write()` 的 `data_offset` 语义是“追加地址块的首个参数槽位”
+
+两者相关，但不应混为一个概念。

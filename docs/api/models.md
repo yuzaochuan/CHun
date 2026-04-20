@@ -118,11 +118,12 @@ FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而�
 - `FmtWriteRequest`：描述用户层原始写入请求
 - `FmtWriteAtom`：描述最小独立写单元，新增了 `end_address` 便于 payload/executor 做区间判断
 - `FmtWriteTask`：描述一个可独立执行的任务，新增了 `total_atoms`
-- `FmtWritePlan`：描述 service 输出的完整计划，额外暴露 `total_atoms`、`total_tasks` 与 `is_blind_safe`
+- `FmtWritePlan`：描述 service 输出的完整计划。当前它表达的是 CHun 的计划对象，而不是自研 atom 优化器本体；会显式记录 `backend`、`offset`、`data_offset`，并额外暴露 `total_atoms`、`total_tasks` 与 `is_blind_safe`
 - `FmtRenderStep`：描述单个 atom 在 renderer 阶段的具体决策，包括 padding、arg index、specifier 与计数器推进
-- `RenderedFmtTask`：描述 renderer 产出的纯字节任务，包含最终 payload、layout、初始/最终计数器
+- `RenderedFmtTask`：描述 renderer 产出的纯字节任务，显式区分 `fmt_bytes`、`data_bytes` 与最终 `payload`，并保留 `backend`、`layout`、初始/最终计数器
 - `FmtExecutionMethod`：描述 executor 最终采用的分发方式，例如 `sendline` 或 `exchange`
 - `FmtExecutionReceipt`：描述一次 task 执行回执，包含 `rendered`、`payload`、`response`、`transport_kind` 与 `dispatch`
+- `FmtExecutionResult`：描述一次完整写执行的聚合结果，包含 `plan`、`receipts`、`responses`、`task_indexes` 与 `total_tasks`
 
 这组 FMT DTO 现在统一采用 `slots=True, frozen=True`。语义上它们是“可缓存、可对比、可入库”的 IR，而不是 service 内部可随手改写的状态对象。为避免出现“dataclass 冻结了但 metadata 还能被偷偷改”的假不可变状态，`metadata` 也会在构造时被冻结。
 
@@ -132,12 +133,24 @@ FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而�
 - `FmtReadMode`
 - `FmtTaskPolicy`
 - `FmtLayoutPolicy`
+- `FmtResultKind`
 
 以及基础别名：
 
 - `AddressLike`
 - `ValueLike`
 - `FmtEndian`
+
+当前 write path 的关键语义差异是：
+
+- `FmtOffset`
+  - 仍然表示最终确认后的 fmt offset fact
+- `FmtWritePlan.offset`
+  - 表示格式串本身使用的 fmt 参数偏移
+- `FmtWritePlan.data_offset`
+  - 表示追加地址数据块在参数表中的首槽位
+
+这让 CHun 可以在保留自己 typed models 的同时，把底层 payload 算法委托给 pwntools，而不再假设 `offset == data_offset`。
 
 ## Libc Catalog 模型
 

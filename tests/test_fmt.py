@@ -5,12 +5,15 @@ from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
 import pytest
+from pwnlib.context import context as pwntools_context
+from pwnlib.fmtstr import fmtstr_split
 
 import chun.plugins.fmt.service as fmt_service_mod
 from chun import CHunSession
 from chun.core.models import (
     FactKind,
     FmtExecutionMethod,
+    FmtExecutionResult,
     FmtExecutionReceipt,
     FmtLayoutPolicy,
     FmtOffsetProbeMode,
@@ -30,11 +33,16 @@ from chun.plugins.fmt import (
     DefaultFmtPlanExecutor,
     DefaultFmtWritePlanner,
     DefaultFmtTaskRenderer,
+    FmtExecutionError,
+    FmtOffsetMissingError,
+    FmtReadError,
     FmtService,
     FmtOffsetNotFoundError,
     FmtOffsetProbe,
+    FmtSymbolResolveError,
     FmtTaskPolicy,
     FmtWriteAtom,
+    FmtWriteError,
     FmtWriteStrategy,
 )
 from chun.transports.blind_reconnect import BlindReconnectTransport
@@ -523,6 +531,8 @@ def test_default_reader_reads_raw_bytes_via_string_primitive() -> None:
     assert leak.raw == b"ABCD"
     assert leak.decoded == b"ABCD"
     assert leak.metadata["dispatch"] == "sendline"
+    assert leak.metadata["primitive"] == "memory_string"
+    assert leak.metadata["body"] == b"ABCD"
     assert session.transport.sent == [  # type: ignore[attr-defined]
         ("sendline", b"%7$s::CHUN::" + (0x804A020).to_bytes(4, "little"))
     ]
@@ -544,6 +554,29 @@ def test_fmt_service_read_uses_default_reader_and_records_observation() -> None:
     assert stored.value == leak
 
 
+def test_default_reader_supports_custom_fmt_for_pointer_text() -> None:
+    session = build_exec_session(b"0x41424344")
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+
+    leak = DefaultFmtReadExecutor().read(
+        session,
+        FmtTargetRef(raw=0xDEADBEEF, address=0xDEADBEEF),
+        size=4,
+        mode=FmtReadMode.POINTER,
+        offset=6,
+        fmt="%6$p",
+        append_target=False,
+        recv_until=None,
+        strict_terminator=False,
+    )
+
+    assert leak.decoded == 0x41424344
+    assert leak.metadata["primitive"] == "custom"
+    assert leak.metadata["append_target"] is False
+    assert session.transport.sent == [("sendline", b"%6$p")]  # type: ignore[attr-defined]
+
+
 def test_fmt_service_write_convenience_executes_plan_directly() -> None:
     session = build_exec_session(b"write-ok\n")
     session.resolve.bind_defaults(
@@ -552,21 +585,23 @@ def test_fmt_service_write_convenience_executes_plan_directly() -> None:
     )
     session.fmt.set_offset(6)
 
-    receipts = session.fmt.write(
+    result = session.fmt.write(
         "printf@got",
         "system",
         strategy=FmtWriteStrategy.SHORT,
         task_policy=FmtTaskPolicy.BY_ATOM,
     )
 
-    assert len(receipts) == 3
-    assert all(receipt.response == b"write-ok\n" for receipt in receipts)
+    assert isinstance(result, FmtExecutionResult)
+    assert result.total_tasks == 3
+    assert result.task_indexes == (0, 1, 2)
+    assert all(response == b"write-ok\n" for response in result.responses)
     assert session.rec.get_artifact("fmt.write.plan") is not None
     assert session.rec.get_artifact("fmt.write.task.0") is not None
     assert session.rec.get_observation("fmt.write.response.0") is not None
 
 
-def test_default_planner_splits_little_endian_byte_writes_minimally() -> None:
+def test_default_planner_uses_pwntools_backend_and_sorts_byte_atoms() -> None:
     planner = DefaultFmtWritePlanner()
     request = FmtWriteRequest(
         target=FmtTargetRef(raw=0x404018, address=0x404018),
@@ -582,16 +617,18 @@ def test_default_planner_splits_little_endian_byte_writes_minimally() -> None:
         task_policy=FmtTaskPolicy.BY_ATOM,
     )
 
+    assert plan.backend == "pwntools"
     assert [(atom.address, atom.value, atom.shift) for atom in plan.atoms] == [
-        (0x404018, 0xEF, 0),
-        (0x404019, 0xBE, 8),
         (0x40401A, 0xAD, 16),
+        (0x404019, 0xBE, 8),
         (0x40401B, 0xDE, 24),
+        (0x404018, 0xEF, 0),
     ]
     assert plan.total_tasks == 4
+    assert plan.data_offset is None
 
 
-def test_default_planner_splits_little_endian_short_writes() -> None:
+def test_default_planner_uses_pwntools_backend_and_sorts_short_atoms() -> None:
     planner = DefaultFmtWritePlanner()
     request = FmtWriteRequest(
         target=FmtTargetRef(raw=0x404020, address=0x404020),
@@ -607,14 +644,15 @@ def test_default_planner_splits_little_endian_short_writes() -> None:
         task_policy=FmtTaskPolicy.BY_TARGET,
     )
 
+    assert plan.backend == "pwntools"
     assert [(atom.address, atom.value, atom.shift) for atom in plan.atoms] == [
-        (0x404020, 0x4344, 0),
         (0x404022, 0x4142, 16),
+        (0x404020, 0x4344, 0),
     ]
     assert plan.total_tasks == 1
 
 
-def test_default_planner_rejects_unaligned_ptr_writes() -> None:
+def test_native_planner_rejects_unaligned_ptr_writes() -> None:
     planner = DefaultFmtWritePlanner()
     request = FmtWriteRequest(
         target=FmtTargetRef(raw=0x404019, address=0x404019),
@@ -629,6 +667,7 @@ def test_default_planner_rejects_unaligned_ptr_writes() -> None:
             endian="little",
             pointer_size=8,
             task_policy=FmtTaskPolicy.PACKED,
+            backend="native",
         )
 
 
@@ -658,6 +697,8 @@ def test_default_renderer_renders_hhn_stream_with_internal_counter() -> None:
         pointer_size=8,
         endian="little",
         offset=None,
+        data_offset=None,
+        backend="native",
         strategy=FmtWriteStrategy.BYTE,
         task_policy=FmtTaskPolicy.BY_TARGET,
         requests=(),
@@ -678,6 +719,12 @@ def test_default_renderer_renders_hhn_stream_with_internal_counter() -> None:
         (7, "hhn", 3),
     ]
     assert rendered.final_counter == 68
+    assert rendered.backend == "native"
+    assert rendered.data_offset == 6
+    assert rendered.fmt_bytes.startswith(b"%65c%6$hhn%3c%7$hhn")
+    assert rendered.data_bytes == (
+        (0x404018).to_bytes(8, "little") + (0x404019).to_bytes(8, "little")
+    )
     assert rendered.payload.startswith(b"%65c%6$hhn%3c%7$hhn")
     assert rendered.payload.endswith(
         (0x404018).to_bytes(8, "little") + (0x404019).to_bytes(8, "little")
@@ -699,6 +746,8 @@ def test_default_renderer_applies_modulo_padding_wrap() -> None:
         pointer_size=8,
         endian="little",
         offset=None,
+        data_offset=None,
+        backend="native",
         strategy=FmtWriteStrategy.BYTE,
         task_policy=FmtTaskPolicy.BY_ATOM,
         requests=(),
@@ -723,6 +772,86 @@ def test_default_renderer_applies_modulo_padding_wrap() -> None:
     assert rendered.payload.startswith(b"%4c%10$hhn")
 
 
+def test_default_renderer_uses_pwntools_fmt_and_data_split() -> None:
+    session = build_session()
+    session.resolve.bind_defaults(
+        elf=SimpleNamespace(got={"printf@got": 0x404018}, bits=64, little_endian=True),
+        libc_elf=SimpleNamespace(sym={"system": 0x4C490}, address=0x7FFFF7DD0000),
+    )
+    plan = session.fmt.plan_writes(
+        {"printf@got": "system"},
+        strategy=FmtWriteStrategy.SHORT,
+        task_policy=FmtTaskPolicy.BY_ATOM,
+        offset=6,
+        data_offset=6,
+        store=False,
+    )
+
+    rendered = session.fmt.render_task(plan.tasks[0], plan=plan, offset=6, data_offset=6)
+
+    assert rendered.backend == "pwntools"
+    assert rendered.fmt_bytes
+    assert rendered.data_bytes
+    assert rendered.payload == rendered.fmt_bytes + rendered.data_bytes
+    assert rendered.data_offset == 6
+
+
+def test_pwntools_backend_render_matches_fmtstr_split_ground_truth() -> None:
+    session = build_session()
+    plan = session.fmt.plan_writes(
+        {0x404018: 0x11223344},
+        strategy=FmtWriteStrategy.SHORT,
+        task_policy=FmtTaskPolicy.PACKED,
+        offset=6,
+        data_offset=6,
+        store=False,
+    )
+
+    rendered = session.fmt.render_task(plan.tasks[0], plan=plan, offset=6, data_offset=6)
+    with pwntools_context.local(bits=64, endian="little"):
+        expected_fmt, expected_data = fmtstr_split(
+            6,
+            {0x404018: b"\x44\x33\x22\x11"},
+            write_size="short",
+        )
+
+    assert rendered.backend == "pwntools"
+    assert rendered.fmt_bytes == expected_fmt
+    assert rendered.data_bytes == expected_data
+    assert rendered.payload == expected_fmt + expected_data
+
+
+def test_fmt_service_passes_no_dollars_to_pwntools_backend() -> None:
+    session = build_session()
+
+    plan = session.fmt.plan_writes(
+        {0x404018: 0x11223344},
+        strategy=FmtWriteStrategy.SHORT,
+        task_policy=FmtTaskPolicy.PACKED,
+        offset=6,
+        data_offset=6,
+        no_dollars=True,
+        store=False,
+    )
+    rendered = session.fmt.render_task(plan.tasks[0], plan=plan, offset=6, data_offset=6)
+
+    assert plan.metadata["no_dollars"] is True
+    assert rendered.backend == "pwntools"
+    assert b"$" not in rendered.fmt_bytes
+
+
+def test_fmt_service_wraps_pwntools_badbytes_failures_with_fmt_write_error() -> None:
+    session = build_session()
+
+    with pytest.raises(FmtWriteError):
+        session.fmt.plan_writes(
+            {0x404018: 0x41},
+            strategy=FmtWriteStrategy.BYTE,
+            badbytes=b"\x18",
+            store=False,
+        )
+
+
 def test_default_executor_dispatches_rendered_payload_on_pwntools_transport() -> None:
     session = build_exec_session(b"done\n")
     atom = FmtWriteAtom(
@@ -738,6 +867,8 @@ def test_default_executor_dispatches_rendered_payload_on_pwntools_transport() ->
         pointer_size=8,
         endian="little",
         offset=6,
+        data_offset=6,
+        backend="native",
         strategy=FmtWriteStrategy.BYTE,
         task_policy=FmtTaskPolicy.BY_ATOM,
         requests=(),
@@ -776,6 +907,8 @@ def test_default_executor_uses_exchange_for_blind_transport() -> None:
         pointer_size=8,
         endian="little",
         offset=6,
+        data_offset=6,
+        backend="native",
         strategy=FmtWriteStrategy.BYTE,
         task_policy=FmtTaskPolicy.BY_ATOM,
         requests=(),
@@ -811,11 +944,12 @@ def test_service_execute_plan_uses_default_executor_and_records_results() -> Non
         store=False,
     )
 
-    results = session.fmt.execute_plan(plan)
+    result = session.fmt.execute_plan(plan)
 
-    assert len(results) == plan.total_tasks
-    assert all(isinstance(item, FmtExecutionReceipt) for item in results)
-    assert results[0].dispatch == FmtExecutionMethod.SENDLINE
+    assert isinstance(result, FmtExecutionResult)
+    assert result.total_tasks == plan.total_tasks
+    assert all(isinstance(item, FmtExecutionReceipt) for item in result.receipts)
+    assert result.receipts[0].dispatch == FmtExecutionMethod.SENDLINE
     stored_result = session.rec.get_artifact("fmt.exec.task.0")
     stored_response = session.rec.get_observation("fmt.exec.response.0")
     stored_render = session.rec.get_artifact("fmt.exec.render.task.0")
@@ -825,6 +959,97 @@ def test_service_execute_plan_uses_default_executor_and_records_results() -> Non
     assert stored_response.value == b"exec-ok\n"
     assert stored_render is not None
     assert stored_render.domain == RecordDomain.FMT
+
+
+def test_fmt_service_execute_plan_raises_explicit_offset_error_when_missing() -> None:
+    session = build_exec_session(b"exec-ok\n")
+    atom = FmtWriteAtom(
+        request_index=0,
+        piece_index=0,
+        address=0x404018,
+        value=0x41,
+        width=1,
+    )
+    task = FmtWriteTask(task_index=0, atoms=(atom,), independent=True)
+    plan = CoreFmtWritePlan(
+        bits=64,
+        pointer_size=8,
+        endian="little",
+        offset=None,
+        data_offset=None,
+        backend="native",
+        strategy=FmtWriteStrategy.BYTE,
+        task_policy=FmtTaskPolicy.BY_ATOM,
+        requests=(),
+        atoms=(atom,),
+        tasks=(task,),
+    )
+
+    with pytest.raises(FmtOffsetMissingError):
+        session.fmt.execute_plan(plan)
+
+
+def test_fmt_service_plan_writes_raises_explicit_symbol_resolve_error() -> None:
+    session = build_session()
+    session.resolve = SimpleNamespace(
+        symbol=lambda name: (_ for _ in ()).throw(KeyError(name)),
+        default_elf=None,
+        default_libc_elf=None,
+    )
+
+    with pytest.raises(FmtSymbolResolveError):
+        session.fmt.plan_writes({"printf@got": "system"}, store=False)
+
+
+def test_default_reader_raises_explicit_error_when_terminator_missing() -> None:
+    session = build_exec_session(b"ABCD")
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+
+    with pytest.raises(FmtReadError):
+        DefaultFmtReadExecutor().read(
+            session,
+            FmtTargetRef(raw=0x804A020, address=0x804A020),
+            size=4,
+            mode=FmtReadMode.RAW,
+            offset=7,
+        )
+
+
+def test_default_executor_wraps_dispatch_failures_with_fmt_execution_error() -> None:
+    class BrokenExecTransport(DummyExecTransport):
+        def sendline(self, data: bytes) -> None:
+            raise OSError("boom")
+
+    session = CHunSession(
+        target=TargetSpec(kind="process"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=BrokenExecTransport(),
+    )
+    atom = FmtWriteAtom(
+        request_index=0,
+        piece_index=0,
+        address=0x404018,
+        value=0x41,
+        width=1,
+    )
+    task = FmtWriteTask(task_index=0, atoms=(atom,), independent=True)
+    plan = CoreFmtWritePlan(
+        bits=64,
+        pointer_size=8,
+        endian="little",
+        offset=6,
+        data_offset=6,
+        backend="native",
+        strategy=FmtWriteStrategy.BYTE,
+        task_policy=FmtTaskPolicy.BY_ATOM,
+        requests=(),
+        atoms=(atom,),
+        tasks=(task,),
+    )
+
+    with pytest.raises(FmtExecutionError):
+        DefaultFmtPlanExecutor().execute_task(session, task, plan=plan, offset=6)
 
 
 def test_service_render_plan_records_rendered_artifacts() -> None:

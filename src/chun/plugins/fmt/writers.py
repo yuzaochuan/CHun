@@ -10,6 +10,7 @@ from ...core.models import (
     FmtWriteTask,
     RenderedFmtTask,
 )
+from .errors import FmtExecutionError
 from .renderer import DefaultFmtTaskRenderer
 from .runtime import dispatch_fmt_payload
 
@@ -56,14 +57,19 @@ class DefaultFmtPlanExecutor:
                 initial_counter=initial_counter,
             )
 
-        response, dispatch, metadata = dispatch_fmt_payload(
-            session,
-            rendered_task.payload,
-            receive=receive,
-            newline=newline,
-            recv_bytes=recv_bytes or self.default_recv_bytes,
-            recv_until=recv_until,
-        )
+        try:
+            response, dispatch, metadata = dispatch_fmt_payload(
+                session,
+                rendered_task.payload,
+                receive=receive,
+                newline=newline,
+                recv_bytes=recv_bytes or self.default_recv_bytes,
+                recv_until=recv_until,
+            )
+        except Exception as exc:
+            raise FmtExecutionError(
+                f"fmt payload dispatch failed: task_index={task.task_index}"
+            ) from exc
         return FmtExecutionReceipt(
             task_index=task.task_index,
             rendered=rendered_task,

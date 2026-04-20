@@ -77,6 +77,14 @@ class FmtExecutionMethod(str, Enum):
     EXCHANGE = "exchange"
 
 
+class FmtResultKind(str, Enum):
+    """fmt 聚合结果类型。"""
+
+    READ = "read"
+    WRITE = "write"
+    EXECUTION = "execution"
+
+
 @dataclass(slots=True, frozen=True)
 class FmtTargetRef:
     """规范化后的写入目标引用。"""
@@ -241,6 +249,8 @@ class FmtWritePlan:
     pointer_size: FmtWordSize
     endian: FmtEndian
     offset: int | None
+    data_offset: int | None
+    backend: str
     strategy: FmtWriteStrategy
     task_policy: FmtTaskPolicy
     requests: tuple[FmtWriteRequest, ...]
@@ -293,8 +303,12 @@ class RenderedFmtTask:
     task_index: int
     atoms: tuple[FmtWriteAtom, ...]
     steps: tuple[FmtRenderStep, ...]
+    fmt_bytes: bytes
+    data_bytes: bytes
     payload: bytes
     offset: int
+    data_offset: int | None
+    backend: str
     layout: FmtLayoutPolicy
     initial_counter: int = 0
     final_counter: int = 0
@@ -325,14 +339,46 @@ class FmtExecutionReceipt:
         object.__setattr__(self, "metadata", _freeze_metadata(self.metadata))
 
 
+@dataclass(slots=True, frozen=True)
+class FmtExecutionResult:
+    """一次完整 fmt 写执行的聚合结果。"""
+
+    kind: FmtResultKind
+    plan: FmtWritePlan
+    receipts: tuple[FmtExecutionReceipt, ...]
+    offset: int
+    result_prefix: str = "fmt.exec"
+    source: str = "fmt.execute_plan"
+    metadata: Mapping[str, object] = field(default_factory=_empty_metadata)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", FmtResultKind(self.kind))
+        object.__setattr__(self, "receipts", tuple(self.receipts))
+        object.__setattr__(self, "metadata", _freeze_metadata(self.metadata))
+
+    @property
+    def total_tasks(self) -> int:
+        return len(self.receipts)
+
+    @property
+    def task_indexes(self) -> tuple[int, ...]:
+        return tuple(receipt.task_index for receipt in self.receipts)
+
+    @property
+    def responses(self) -> tuple[bytes | None, ...]:
+        return tuple(receipt.response for receipt in self.receipts)
+
+
 __all__ = [
     "AddressLike",
     "FmtEndian",
+    "FmtExecutionResult",
     "FmtExecutionDispatch",
     "FmtExecutionMethod",
     "FmtExecutionReceipt",
     "FmtOffsetProbeMode",
     "FmtOffsetProbeResult",
+    "FmtResultKind",
     "FmtLayoutPolicy",
     "FmtRenderSpecifier",
     "FmtRenderStep",

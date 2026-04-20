@@ -119,14 +119,34 @@
 
 ## Fmt 子系统现状
 
-`fmt` 现在已经按四段式职责收口：
+`fmt` 现在已经按“CHun 语义层 + payload backend”收口：
 
 - probe：负责 offset 探测，并把原始响应 / probe artifact / 最终 fact 分层入库
-- planner：负责把写入意图拆成 `FmtWriteAtom` / `FmtWriteTask`
-- renderer：负责把 task 纯函数化渲染成 `RenderedFmtTask`
+- planner：负责规范化 request、选择 backend、生成 CHun 的 `FmtWritePlan`
+- renderer：负责把 backend 结果包装成 `RenderedFmtTask`
 - executor：负责按 transport 能力把 rendered payload 分发出去，并产出 `FmtExecutionReceipt`
 
-其中 executor 不在 service 内缓存状态，也不承担 workflow / replay；blind 场景通过 `BlindReconnectTransport.exchange()` 完成单 task 执行，长连接场景走普通 `sendline()` / `recv()`。
+其中写路径默认 backend 是 pwntools `pwnlib.fmtstr`：
+
+- atom 生成 / 合并 / 排序
+- `fmt` / `data` 拆分
+- `badbytes` / `overflows` / `no_dollars` 等约束
+
+继续由 CHun 自己保留的部分是：
+
+- typed models
+- registry/artifact/observation/fact 回写
+- blind / reconnect transport dispatch
+- `write()` / `writes()` / `execute_plan()` façade
+
+另外，write path 现在显式区分：
+
+- `offset`
+  - 格式串使用的 fmt 参数槽位
+- `data_offset`
+  - payload 尾部追加地址块的首槽位
+
+这两个概念不再被默认视为同一个值。
 
 ## Transport 统一原则
 
