@@ -30,6 +30,12 @@
 
 详见：[Blind API](blind.md)
 
+## FMT
+
+职责：提供 offset 探测、read primitive、write plan/render/execute 闭环，以及脚本态可直接使用的 `read()` / `write()` / `writes()` 高层 façade。
+
+详见：[FMT API](fmt.md)
+
 ## 数据模型与枚举
 
 职责：提供 `TargetSpec` / `TransportSpec`、Registry 相关数据模型、FMT 计划模型，以及 libc catalog 的结构化查询结果对象。
