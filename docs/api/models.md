@@ -34,6 +34,22 @@
 - `FmtReadMode`
 - `FmtTaskPolicy`
 - `FmtLayoutPolicy`
+- `ImportRef`
+- `ImportModel`
+- `AssignNode`
+- `CallNode`
+- `ExprNode`
+- `AnalysisNode`
+- `OpaqueCallNode`
+- `RecursiveCallNode`
+- `FunctionActionDef`
+- `TopLevelBlockDef`
+- `ExpActionIR`
+- `WorkflowCheckpoint`
+- `WorkflowPrimitive`
+- `WorkflowTranscript`
+- `WorkflowStepReceipt`
+- `WorkflowExecutionResult`
 
 ## `TargetSpec`
 
@@ -106,6 +122,8 @@ FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而�
 
 - `session.fmt`、blind executor、后续 planner / writer 可以共享同一组类型，而不是各自维护私有 dataclass
 - 模型层职责更清晰：`plugins/fmt` 负责 service / orchestration，`core/models` 负责稳定数据形状
+
+这些模型会继续通过 `chun.core.models`、`chun.core` 和顶层 `chun` 公开导出，脚本态和插件态都应复用同一套类型入口。
 
 当前这组模型包括：
 
@@ -183,6 +201,70 @@ FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而�
 - `value`
 
 其中 `value` 是 `aligned_base` 的语义化别名，方便脚本里直接继续做地址计算。
+
+## Workflow / Action IR 模型
+
+workflow 相关 DTO 现在拆成了两组。
+
+### 编译期 Action IR
+
+编译期模型统一放在 `src/chun/core/models/action_ir.py`。
+
+这组模型描述 exploit 源码的静态结构：
+
+- `ImportRef` / `ImportModel`
+  - 记录 import 区域
+- `FunctionActionDef`
+  - 当前模块内函数定义对应的 ActionDef
+- `TopLevelBlockDef`
+  - 定义之间的顶层可执行块
+- `ExpActionIR`
+  - 整个 exploit 文件的 Action IR 容器
+- `AssignNode`
+  - 赋值语句
+- `CallNode`
+  - 指向当前模块内 ActionDef 的调用边
+- `PrimitiveNode`
+  - 直接 IO 原语或 session 初始化原语
+- `ExprNode`
+  - 纯值构造调用，例如 `flat()`、`str()`、`int()`
+  - 当前会同时保留表达式结构以及可稳定求值时的 `resolved_value` / `value_summary`
+- `AnalysisNode`
+  - 推断/分析类调用，不作为 replay 必需路径
+- `OpaqueCallNode`
+  - 当前无法稳定翻译的调用
+- `RecursiveCallNode`
+  - 递归或循环展开时的停止节点
+
+### 执行期 Workflow
+
+执行期模型统一放在 `src/chun/core/models/workflow.py`。
+
+这组模型是 runtime / executor 真正消费的对象：
+
+- `WorkflowCheckpoint`
+  - workflow 执行期检查点
+- `WorkflowPrimitive`
+  - runtime 真正执行的 primitive；当前第一版支持 `session_init`、`send`、`sendline`、`expect`、`recv`、`checkpoint`
+- `WorkflowTranscript`
+  - 某个入口块/函数展开后的 primitive 序列
+- `WorkflowStepReceipt`
+  - 单步执行后的结构化回执
+- `WorkflowExecutionResult`
+  - 一次 transcript 执行的聚合结果
+
+这两层模型现在都支持通过 `WorkflowJsonCodec` 稳定导出成 JSON：
+
+- `ExpActionIR` -> `*.action_ir.json`
+- `WorkflowTranscript` -> `*.workflow.json`
+
+这样 workflow 可以把“分析资产”和“执行资产”分开落盘，而不是把 replay 能力绑死在一次 Python 进程里。
+
+这层模型的核心原则是：
+
+- 结构优先于语义猜测
+- 只让当前模块内 `def` 成为 ActionDef
+- 外部调用统一通过 translator registry 诚实降级
 
 ## 为什么要显式带 `domain`
 

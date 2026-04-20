@@ -70,6 +70,12 @@ class ResolveService:
             self.default_elf = elf
         if libc_elf is not None:
             self.default_libc_elf = libc_elf
+        if self.session is not None and (elf is not None or libc_elf is not None):
+            self.session.bind_binaries(
+                elf=elf,
+                libc_elf=libc_elf,
+                source="resolve.bind_defaults",
+            )
 
     def _normalize_symbol_name(self, raw_name: str) -> str:
         if self.catalog_service is not None:
