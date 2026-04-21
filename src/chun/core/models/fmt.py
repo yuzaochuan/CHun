@@ -476,6 +476,8 @@ class FmtWriteComparison:
     ) -> str:
         if not candidate.ok:
             return "❌"
+        if candidate.pad_time == "EXTREME":
+            return "❌"
         if buflen is None:
             return "❔"
         return "✅" if candidate.total_send_len(end) <= buflen else "❌"
@@ -506,6 +508,96 @@ class FmtWriteComparison:
         if ch in printable and ch not in "\r\n\t\x0b\x0c":
             return ch
         return "·"
+
+
+@dataclass(slots=True, frozen=True)
+class FmtWritesComparison:
+    """同一批写请求在多种 strategy 下的对照结果。"""
+
+    requests: tuple[FmtWriteRequest, ...]
+    candidates: tuple[FmtWriteCandidate, ...]
+    metadata: Mapping[str, object] = field(default_factory=_empty_metadata)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "requests", tuple(self.requests))
+        object.__setattr__(self, "candidates", tuple(self.candidates))
+        object.__setattr__(self, "metadata", _freeze_metadata(self.metadata))
+
+    def __str__(self) -> str:
+        buflen = self.metadata.get("buflen")
+        show_hex = bool(self.metadata.get("show_hex", False))
+        end = self.metadata.get("end")
+        if isinstance(end, str):
+            end_bytes = end.encode("latin-1", errors="replace")
+        elif isinstance(end, bytes):
+            end_bytes = end
+        else:
+            end_bytes = None
+
+        request_preview = ", ".join(
+            f"{hex(request.target.address)}<-{hex(request.value.value)}"
+            for request in self.requests[:3]
+        )
+        if len(self.requests) > 3:
+            request_preview += ", ..."
+        lines = [
+            "[FMT.writes] "
+            f"requests={len(self.requests)} "
+            f"writes=[{request_preview}] "
+            f"end={repr(end_bytes if end_bytes is not None else None)} "
+            f"buflen={buflen}",
+        ]
+        for candidate in self.candidates:
+            status = FmtWriteComparison._status_icon(
+                candidate=candidate,
+                buflen=buflen if isinstance(buflen, int) else None,
+                end=end_bytes,
+            )
+            if not candidate.ok:
+                lines.append(f"◆ {candidate.strategy.value.upper()}   {status}")
+                lines.append(f"  error {candidate.error}")
+                continue
+            data_offsets = ",".join(
+                "?" if item is None else str(item) for item in candidate.data_offsets
+            )
+            duplicate_note = self._duplicate_note(candidate)
+            first_line = f"◆ {candidate.strategy.value.upper()}   {status}"
+            if duplicate_note:
+                first_line += f"   {duplicate_note}"
+            lines.append(first_line)
+            lines.append(
+                "  "
+                f"atoms {candidate.atom_count}   "
+                f"tasks {candidate.task_count}   "
+                f"send {candidate.total_send_len(end_bytes)}B   "
+                f"data@{data_offsets}"
+            )
+            lines.append(
+                "  "
+                f"max_pad {candidate.max_padding}   "
+                f"pad_time {candidate.pad_time}"
+            )
+            for index, rendered in enumerate(candidate.rendered_tasks):
+                prefix = f"  task[{index}] " if candidate.task_count > 1 else "  "
+                lines.append(f"{prefix}fmt {rendered.fmt_bytes!r}")
+                lines.append(f"{prefix}payload {rendered.payload!r}")
+                if show_hex:
+                    send_bytes = rendered.payload + (end_bytes or b"")
+                    lines.append(f"{prefix}send.hex")
+                    lines.extend(
+                        FmtWriteComparison._format_hexdump(send_bytes, indent="      ")
+                    )
+        return "\n".join(lines)
+
+    def _duplicate_note(self, candidate: FmtWriteCandidate) -> str | None:
+        if not candidate.ok:
+            return None
+        for other in self.candidates:
+            if other is candidate or not other.ok:
+                continue
+            if candidate.payloads == other.payloads:
+                return f"same as {other.strategy.value.upper()}"
+        return None
 
 
 @dataclass(slots=True, frozen=True)
@@ -569,6 +661,7 @@ __all__ = [
     "FmtResultKind",
     "FmtWriteCandidate",
     "FmtWriteComparison",
+    "FmtWritesComparison",
     "FmtLayoutPolicy",
     "FmtRenderSpecifier",
     "FmtRenderStep",

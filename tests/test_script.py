@@ -195,7 +195,7 @@ def test_script_initializes_target_and_runtime_defaults(
     else:
         assert getattr(tls, "binary", None) is entry.elf or script_mod.context.binary is entry.elf
     assert script_mod.context.log_level in ("debug", 10)
-    assert script_mod.context.terminal == ["tmux", "splitw", "-h", "-d"]
+    assert script_mod.context.terminal == ["tmux", "splitw", "-h"]
     assert fake_pwntools_env["loaded"] == [("./challenge", False)]
 
 
@@ -242,7 +242,7 @@ def test_script_start_uses_process_by_default(
     assert calls[0]["target"].cwd == "/tmp/challenge"
     assert calls[0]["target"].metadata == {
         "log_level": "debug",
-        "terminal": ["tmux", "splitw", "-h", "-d"],
+        "terminal": ["tmux", "splitw", "-h"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout is None
@@ -291,7 +291,7 @@ def test_script_start_uses_remote_when_remote_flag_is_set(
     assert calls[0]["target"].libc == "./libc.so.6"
     assert calls[0]["target"].metadata == {
         "log_level": "info",
-        "terminal": ["tmux", "splitw", "-h", "-d"],
+        "terminal": ["tmux", "splitw", "-h"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout == 1.5
@@ -537,17 +537,41 @@ def test_script_fmt_write_builder_reuses_arguments_for_info_and_send(
 ) -> None:
     session = DummySession(kind="process")
     compare_calls: list[dict[str, Any]] = []
-    write_calls: list[dict[str, Any]] = []
+    plan_calls: list[dict[str, Any]] = []
+    execute_calls: list[dict[str, Any]] = []
+    recvuntil_calls: list[tuple[bytes, bool]] = []
+    plan = object()
 
     def fake_compare_write(*args: Any, **kwargs: Any) -> str:
         compare_calls.append({"args": args, "kwargs": kwargs})
         return "info"
 
-    def fake_write(*args: Any, **kwargs: Any) -> str:
-        write_calls.append({"args": args, "kwargs": kwargs})
+    def fake_plan_write(*args: Any, **kwargs: Any) -> object:
+        plan_calls.append({"args": args, "kwargs": kwargs})
+        return plan
+
+    def fake_render_plan(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        return (
+            SimpleNamespace(
+                payload=b"A" * 16,
+                steps=(SimpleNamespace(padding=0),),
+            ),
+        )
+
+    def fake_execute_plan(*args: Any, **kwargs: Any) -> str:
+        execute_calls.append({"args": args, "kwargs": kwargs})
         return "sent"
 
-    session.fmt = SimpleNamespace(compare_write=fake_compare_write, write=fake_write)
+    fake_io = SimpleNamespace(
+        recvuntil=lambda delim, drop=False: recvuntil_calls.append((delim, drop)) or delim
+    )
+    session.fmt = SimpleNamespace(
+        compare_write=fake_compare_write,
+        plan_write=fake_plan_write,
+        render_plan=fake_render_plan,
+        execute_plan=fake_execute_plan,
+        session=SimpleNamespace(io=fake_io),
+    )
 
     def fake_from_specs(
         cls: type[CHun],
@@ -564,15 +588,15 @@ def test_script_fmt_write_builder_reuses_arguments_for_info_and_send(
     action = entry.fmt.write(
         0x6010A0,
         0x601018,
+        b"name: ",
+        6,
         strategy="byte",
-        offset=6,
         task_policy="by_atom",
-        buflen=48,
         end=b" ",
     )
 
-    assert action.info(show_hex=True) == "info"
-    assert action.send() == "sent"
+    assert action.info(48, show_hex=True) == "info"
+    assert action.send(48, show_hex=True) == "sent"
     assert compare_calls == [
         {
             "args": (0x6010A0, 0x601018),
@@ -589,11 +613,12 @@ def test_script_fmt_write_builder_reuses_arguments_for_info_and_send(
                 "buflen": 48,
                 "end": b" ",
                 "show_hex": True,
-                "loginfo": True,
+                "loginfo": False,
             },
         }
     ]
-    assert write_calls == [
+    assert recvuntil_calls == [(b"name: ", False)]
+    assert plan_calls == [
         {
             "args": (0x6010A0, 0x601018),
             "kwargs": {
@@ -601,10 +626,273 @@ def test_script_fmt_write_builder_reuses_arguments_for_info_and_send(
                 "offset": 6,
                 "task_policy": script_mod.FmtTaskPolicy.BY_ATOM,
                 "data_offset": None,
+            },
+        }
+    ]
+    assert execute_calls == [
+        {
+            "args": (plan,),
+            "kwargs": {
+                "offset": 6,
+                "data_offset": None,
+                "receive": False,
                 "end": b" ",
             },
         }
     ]
+
+
+def test_script_fmt_facade_enables_compare_writes_loginfo_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[dict[str, Any]] = []
+
+    def fake_compare_writes(*args: Any, **kwargs: Any) -> str:
+        calls.append({"args": args, "kwargs": kwargs})
+        return "comparison"
+
+    session.fmt = SimpleNamespace(compare_writes=fake_compare_writes)
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    writes = {0x6010A0: 0x601018, 0x6010B0: 0x601028}
+    assert entry.fmt.compare_writes(writes) == "comparison"
+    assert calls == [
+        {
+            "args": (writes,),
+            "kwargs": {
+                "strategies": (
+                    script_mod.FmtWriteStrategy.AUTO,
+                    script_mod.FmtWriteStrategy.BYTE,
+                    script_mod.FmtWriteStrategy.SHORT,
+                    script_mod.FmtWriteStrategy.INT,
+                ),
+                "offset": None,
+                "task_policy": script_mod.FmtTaskPolicy.PACKED,
+                "data_offset": None,
+                "buflen": None,
+                "end": b"\n",
+                "show_hex": False,
+                "loginfo": True,
+            },
+        }
+    ]
+
+
+def test_script_fmt_writes_builder_reuses_arguments_for_info_and_send(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    compare_calls: list[dict[str, Any]] = []
+    plan_calls: list[dict[str, Any]] = []
+    execute_calls: list[dict[str, Any]] = []
+    recvuntil_calls: list[tuple[bytes, bool]] = []
+    plan = object()
+
+    def fake_compare_writes(*args: Any, **kwargs: Any) -> str:
+        compare_calls.append({"args": args, "kwargs": kwargs})
+        return "info"
+
+    def fake_plan_writes(*args: Any, **kwargs: Any) -> object:
+        plan_calls.append({"args": args, "kwargs": kwargs})
+        return plan
+
+    def fake_render_plan(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        return (
+            SimpleNamespace(
+                payload=b"A" * 16,
+                steps=(SimpleNamespace(padding=0),),
+            ),
+        )
+
+    def fake_execute_plan(*args: Any, **kwargs: Any) -> str:
+        execute_calls.append({"args": args, "kwargs": kwargs})
+        return "sent"
+
+    fake_io = SimpleNamespace(
+        recvuntil=lambda delim, drop=False: recvuntil_calls.append((delim, drop)) or delim
+    )
+    session.fmt = SimpleNamespace(
+        compare_writes=fake_compare_writes,
+        plan_writes=fake_plan_writes,
+        render_plan=fake_render_plan,
+        execute_plan=fake_execute_plan,
+        session=SimpleNamespace(io=fake_io),
+    )
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    writes = {0x6010A0: 0x601018, 0x6010B0: 0x601028}
+    action = entry.fmt.writes(
+        writes,
+        b"choice> ",
+        6,
+        strategy="short",
+        task_policy="by_target",
+        end=b" ",
+    )
+
+    assert action.info(96, show_hex=True) == "info"
+    assert action.send(96, show_hex=True) == "sent"
+    assert compare_calls == [
+        {
+            "args": (writes,),
+            "kwargs": {
+                "strategies": (
+                    script_mod.FmtWriteStrategy.AUTO,
+                    script_mod.FmtWriteStrategy.BYTE,
+                    script_mod.FmtWriteStrategy.SHORT,
+                    script_mod.FmtWriteStrategy.INT,
+                ),
+                "offset": 6,
+                "task_policy": script_mod.FmtTaskPolicy.BY_TARGET,
+                "data_offset": None,
+                "buflen": 96,
+                "end": b" ",
+                "show_hex": True,
+                "loginfo": True,
+            },
+        }
+    ]
+    assert recvuntil_calls == [(b"choice> ", False)]
+    assert plan_calls == [
+        {
+            "args": (writes,),
+            "kwargs": {
+                "strategy": script_mod.FmtWriteStrategy.SHORT,
+                "offset": 6,
+                "task_policy": script_mod.FmtTaskPolicy.BY_TARGET,
+                "data_offset": None,
+            },
+        }
+    ]
+    assert execute_calls == [
+        {
+            "args": (plan,),
+            "kwargs": {
+                "offset": 6,
+                "data_offset": None,
+                "receive": False,
+                "end": b" ",
+            },
+        }
+    ]
+
+
+def test_script_fmt_send_logs_error_when_send_len_exceeds_buflen(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    errors: list[str] = []
+    plan = SimpleNamespace(offset=6)
+
+    def fake_plan_write(*args: Any, **kwargs: Any) -> object:
+        return plan
+
+    def fake_render_plan(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        return (
+            SimpleNamespace(
+                payload=b"A" * 32,
+                steps=(SimpleNamespace(padding=0),),
+            ),
+        )
+
+    def fake_execute_plan(*args: Any, **kwargs: Any) -> str:
+        return "sent"
+
+    session.fmt = SimpleNamespace(
+        plan_write=fake_plan_write,
+        render_plan=fake_render_plan,
+        execute_plan=fake_execute_plan,
+        session=SimpleNamespace(io=SimpleNamespace(recvuntil=lambda *_args, **_kwargs: b"")),
+    )
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+    monkeypatch.setattr(script_mod.log, "error", errors.append)
+
+    entry = CHun.script("./challenge").start()
+    assert entry.fmt.write(0x6010A0, 0x601018).send(16) == "sent"
+    assert errors == ["fmt 发送长度 33B 超过 buflen=16B，仍继续发送。"]
+
+
+def test_script_fmt_send_logs_warning_for_high_pad_time(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    warnings: list[str] = []
+    plan = SimpleNamespace(offset=6)
+
+    def fake_plan_write(*args: Any, **kwargs: Any) -> object:
+        return plan
+
+    def fake_render_plan(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        return (
+            SimpleNamespace(
+                payload=b"A" * 8,
+                steps=(SimpleNamespace(padding=0x1000),),
+            ),
+        )
+
+    def fake_execute_plan(*args: Any, **kwargs: Any) -> str:
+        return "sent"
+
+    session.fmt = SimpleNamespace(
+        plan_write=fake_plan_write,
+        render_plan=fake_render_plan,
+        execute_plan=fake_execute_plan,
+        session=SimpleNamespace(io=SimpleNamespace(recvuntil=lambda *_args, **_kwargs: b"")),
+    )
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    assert entry.fmt.write(0x6010A0, 0x601018).send() == "sent"
+    assert warnings == ["fmt 的 pad_time 为 HIGH（max_pad=4096），服务端可能变慢或超时。"]
 
 
 def test_script_gdb_warns_for_remote_session(
