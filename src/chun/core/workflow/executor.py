@@ -13,7 +13,7 @@ from ..models import (
     WorkflowTranscript,
 )
 from .launchers import WorkflowLauncher
-from .runtime import ProcessWorkflowRuntime, WorkflowRuntime
+from .runtime import ProcessWorkflowRuntime, WorkflowRuntime, WorkflowScriptFacade
 
 
 class WorkflowExecutor:
@@ -31,6 +31,7 @@ class WorkflowExecutor:
         record: bool = True,
     ) -> WorkflowExecutionResult:
         session = None
+        env: dict[str, object] = {}
         receipts: list[WorkflowStepReceipt] = []
         final_checkpoint = None
         try:
@@ -46,6 +47,9 @@ class WorkflowExecutor:
                         transport_kind=session.transport_spec.kind,
                         metadata={"started": True},
                     )
+                    bind_target = primitive.metadata.get("bind_target")
+                    if isinstance(bind_target, str) and bind_target:
+                        env[bind_target] = WorkflowScriptFacade(session)
                 elif primitive.kind == "checkpoint":
                     if primitive.checkpoint is None:
                         raise RuntimeError("checkpoint primitive requires WorkflowCheckpoint")
@@ -71,6 +75,7 @@ class WorkflowExecutor:
                         session,
                         primitive,
                         step_index=index,
+                        env=env,
                     )
                 receipts.append(receipt)
                 if record and session is not None:

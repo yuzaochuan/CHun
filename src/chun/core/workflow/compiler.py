@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from ..models.action_ir import (
+    AnalysisNode,
     AssignNode,
     CallNode,
     ExpActionIR,
@@ -325,7 +327,17 @@ class ExploitWorkflowCompiler:
                 function_names=function_names,
                 metadata=metadata,
             )
-        callee = self._resolve_call_name(call.func) or self._segment(source, call.func)
+        callee = self._resolve_call_name(call.func)
+        if callee is None and isinstance(call.func, ast.Attribute):
+            receiver = self._lower_expr(
+                call.func.value,
+                source=source,
+                function_names=function_names,
+            )
+            callee = f"<expr>.{call.func.attr}"
+            args = (receiver, *args)
+        if callee is None:
+            callee = self._segment(source, call.func)
         if callee in function_names:
             return CallNode(
                 callee=function_names[callee],
@@ -443,7 +455,6 @@ class ExploitWorkflowCompiler:
                 )
                 continue
             if isinstance(node, AssignNode) and isinstance(node.value, PrimitiveNode):
-                expanded.extend(self.registry.expand_macro(node.value))
                 expanded.append(node)
                 continue
             if isinstance(node, PrimitiveNode):
@@ -478,6 +489,18 @@ class ExploitWorkflowCompiler:
         action = ir.action_map.get(node.callee)
         if action is None:
             return (node,)
+        bindings = self._bind_call_arguments(action, node)
+        bound_body = tuple(
+            self._rewrite_node(
+                item,
+                ir=ir,
+                bindings=bindings,
+                call_stack=call_stack + (node.callee,),
+                depth=depth + 1,
+                max_expand_depth=max_expand_depth,
+            )
+            for item in getattr(action, "body")
+        )
         return (
             PrimitiveNode(
                 kind="checkpoint",
@@ -487,19 +510,292 @@ class ExploitWorkflowCompiler:
                 metadata={"expanded_action": node.callee},
             ),
         ) + self._expand_body(
-            tuple(getattr(action, "body")),
+            bound_body,
             ir=ir,
             call_stack=call_stack + (node.callee,),
             depth=depth + 1,
             max_expand_depth=max_expand_depth,
         )
 
+    def _bind_call_arguments(
+        self,
+        action: object,
+        node: CallNode,
+    ) -> Mapping[str, object]:
+        params = tuple(getattr(action, "params", ()))
+        bindings: dict[str, object] = {}
+        for index, param in enumerate(params):
+            if index < len(node.args):
+                bindings[param] = node.args[index]
+                continue
+            if param in node.keywords:
+                bindings[param] = node.keywords[param]
+        return bindings
+
+    def _rewrite_node(
+        self,
+        node: object,
+        *,
+        ir: ExpActionIR,
+        bindings: Mapping[str, object],
+        call_stack: tuple[str, ...],
+        depth: int,
+        max_expand_depth: int,
+    ) -> object:
+        if isinstance(node, AssignNode):
+            return replace(
+                node,
+                value=self._rewrite_value(
+                    node.value,
+                    ir=ir,
+                    bindings=bindings,
+                    call_stack=call_stack,
+                    depth=depth,
+                    max_expand_depth=max_expand_depth,
+                ),
+            )
+        if isinstance(node, PrimitiveNode):
+            return replace(
+                node,
+                payload=self._rewrite_value(
+                    node.payload,
+                    ir=ir,
+                    bindings=bindings,
+                    call_stack=call_stack,
+                    depth=depth,
+                    max_expand_depth=max_expand_depth,
+                ),
+                args=tuple(
+                    self._rewrite_value(
+                        arg,
+                        ir=ir,
+                        bindings=bindings,
+                        call_stack=call_stack,
+                        depth=depth,
+                        max_expand_depth=max_expand_depth,
+                    )
+                    for arg in node.args
+                ),
+                keywords={
+                    key: self._rewrite_value(
+                        value,
+                        ir=ir,
+                        bindings=bindings,
+                        call_stack=call_stack,
+                        depth=depth,
+                        max_expand_depth=max_expand_depth,
+                    )
+                    for key, value in node.keywords.items()
+                },
+            )
+        if isinstance(node, ExprNode):
+            return self._rewrite_value(
+                node,
+                ir=ir,
+                bindings=bindings,
+                call_stack=call_stack,
+                depth=depth,
+                max_expand_depth=max_expand_depth,
+            )
+        if isinstance(node, CallNode):
+            return self._rewrite_value(
+                node,
+                ir=ir,
+                bindings=bindings,
+                call_stack=call_stack,
+                depth=depth,
+                max_expand_depth=max_expand_depth,
+            )
+        return node
+
+    def _rewrite_value(
+        self,
+        value: object,
+        *,
+        ir: ExpActionIR,
+        bindings: Mapping[str, object],
+        call_stack: tuple[str, ...],
+        depth: int,
+        max_expand_depth: int,
+    ) -> object:
+        if isinstance(value, NameRefNode):
+            return bindings.get(value.name, value)
+        if isinstance(value, LiteralNode):
+            return value
+        if isinstance(value, ExprNode):
+            args = tuple(
+                self._rewrite_value(
+                    arg,
+                    ir=ir,
+                    bindings=bindings,
+                    call_stack=call_stack,
+                    depth=depth,
+                    max_expand_depth=max_expand_depth,
+                )
+                for arg in value.args
+            )
+            keywords = {
+                key: self._rewrite_value(
+                    nested,
+                    ir=ir,
+                    bindings=bindings,
+                    call_stack=call_stack,
+                    depth=depth,
+                    max_expand_depth=max_expand_depth,
+                )
+                for key, nested in value.keywords.items()
+            }
+            translation = self.registry.classify(
+                value.callee,
+                args=args,
+                keywords=keywords,
+                source_span=value.source_span,
+                metadata=value.metadata,
+            )
+            if translation is not None and isinstance(translation.node, ExprNode):
+                return translation.node
+            return replace(value, args=args, keywords=keywords)
+        if isinstance(value, CallNode):
+            args = tuple(
+                self._rewrite_value(
+                    arg,
+                    ir=ir,
+                    bindings=bindings,
+                    call_stack=call_stack,
+                    depth=depth,
+                    max_expand_depth=max_expand_depth,
+                )
+                for arg in value.args
+            )
+            keywords = {
+                key: self._rewrite_value(
+                    nested,
+                    ir=ir,
+                    bindings=bindings,
+                    call_stack=call_stack,
+                    depth=depth,
+                    max_expand_depth=max_expand_depth,
+                )
+                for key, nested in value.keywords.items()
+            }
+            if depth < max_expand_depth and value.callee not in call_stack:
+                action = ir.action_map.get(value.callee)
+                inline_result = self._inline_callable_return(
+                    action,
+                    args=args,
+                    keywords=keywords,
+                    ir=ir,
+                    call_stack=call_stack + (value.callee,),
+                    depth=depth + 1,
+                    max_expand_depth=max_expand_depth,
+                )
+                if inline_result is not None:
+                    return inline_result
+            return replace(value, args=args, keywords=keywords)
+        return value
+
+    def _inline_callable_return(
+        self,
+        action: object | None,
+        *,
+        args: tuple[object, ...],
+        keywords: Mapping[str, object],
+        ir: ExpActionIR,
+        call_stack: tuple[str, ...],
+        depth: int,
+        max_expand_depth: int,
+    ) -> object | None:
+        if not isinstance(action, FunctionActionDef):
+            return None
+        if len(action.body) != 1:
+            return None
+        only = action.body[0]
+        if not isinstance(only, ExprNode) or only.kind != "return" or len(only.args) != 1:
+            return None
+        bindings: dict[str, object] = {}
+        for index, param in enumerate(action.params):
+            if index < len(args):
+                bindings[param] = args[index]
+                continue
+            if param in keywords:
+                bindings[param] = keywords[param]
+        return self._rewrite_value(
+            only.args[0],
+            ir=ir,
+            bindings=bindings,
+            call_stack=call_stack,
+            depth=depth,
+            max_expand_depth=max_expand_depth,
+        )
+
     def _node_to_transcript(self, node: object, *, source_action: str) -> tuple[WorkflowPrimitive, ...]:
+        if isinstance(node, AssignNode):
+            return self._assign_to_transcript(node, source_action=source_action)
+        if isinstance(node, AnalysisNode):
+            return self._call_to_transcript(node, source_action=source_action)
         if isinstance(node, PrimitiveNode):
             return self._primitive_to_transcript(node, source_action=source_action)
         return ()
 
-    def _primitive_to_transcript(self, node: PrimitiveNode, *, source_action: str) -> tuple[WorkflowPrimitive, ...]:
+    def _assign_to_transcript(
+        self,
+        node: AssignNode,
+        *,
+        source_action: str,
+    ) -> tuple[WorkflowPrimitive, ...]:
+        if isinstance(node.value, PrimitiveNode):
+            if node.value.kind == "session_init":
+                return self._primitive_to_transcript(
+                    node.value,
+                    source_action=source_action,
+                    bind_target=node.target,
+                )
+            return self._primitive_to_transcript(
+                node.value,
+                source_action=source_action,
+                bind_target=node.target,
+            )
+        return (
+            WorkflowPrimitive(
+                kind="assign",
+                payload=self._resolve_runtime_value(node.value),
+                source_action=source_action,
+                source_node="assign",
+                metadata={
+                    "target": node.target,
+                    "payload_expr": node.value,
+                    **dict(node.metadata),
+                },
+            ),
+        )
+
+    def _call_to_transcript(
+        self,
+        node: AnalysisNode,
+        *,
+        source_action: str,
+    ) -> tuple[WorkflowPrimitive, ...]:
+        return (
+            WorkflowPrimitive(
+                kind="call",
+                payload=self._resolve_runtime_value(node),
+                source_action=source_action,
+                source_node="call",
+                metadata={
+                    "callee": node.callee,
+                    "payload_expr": node,
+                    **dict(node.metadata),
+                },
+            ),
+        )
+
+    def _primitive_to_transcript(
+        self,
+        node: PrimitiveNode,
+        *,
+        source_action: str,
+        bind_target: str | None = None,
+    ) -> tuple[WorkflowPrimitive, ...]:
         if node.kind == "checkpoint":
             return (
                 WorkflowPrimitive(
@@ -519,6 +815,8 @@ class ExploitWorkflowCompiler:
             resolved_metadata = dict(node.metadata)
             if node.kind == "session_init":
                 resolved_metadata["launcher_kwargs"] = self._resolve_runtime_mapping(node.keywords)
+            if bind_target is not None:
+                resolved_metadata["bind_target"] = bind_target
             return (
                 WorkflowPrimitive(
                     kind=node.kind,
@@ -536,6 +834,8 @@ class ExploitWorkflowCompiler:
         if isinstance(value, ExprNode) and value.evaluated:
             return value.resolved_value
         if isinstance(value, LiteralNode):
+            if value.value_type == "expr_source":
+                return value
             return value.value
         if isinstance(value, NameRefNode):
             return value.name

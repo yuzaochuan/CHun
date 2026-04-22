@@ -266,6 +266,75 @@ def fire():
     assert isinstance(send.metadata["payload_expr"], ExprNode)
 
 
+def test_transcript_inlines_local_helper_return_for_sendlineafter_payload() -> None:
+    source = """
+def itob(num):
+    return str(num).encode()
+
+def menu(num):
+    s.sla(b">> ", itob(num))
+
+menu(1)
+"""
+
+    compiler = build_compiler()
+    ir = compiler.compile_source(source, module_name="exp")
+    transcript = compiler.build_module_transcript(ir)
+
+    assert [item.kind for item in transcript.primitives] == [
+        "checkpoint",
+        "checkpoint",
+        "expect",
+        "sendline",
+    ]
+    assert transcript.primitives[3].payload == b"1"
+
+
+def test_transcript_keeps_unresolved_dynamic_payload_as_node() -> None:
+    source = """
+from pwn import p64
+
+def fire():
+    s.sendline(p64(s.resolve.symbol("system")))
+"""
+
+    compiler = build_compiler()
+    ir = compiler.compile_source(source, module_name="exp")
+    transcript = compiler.build_transcript(ir, "exp.fire")
+
+    payload = transcript.primitives[1].payload
+    assert not isinstance(payload, str)
+    assert isinstance(payload, ExprNode)
+
+
+def test_build_module_transcript_preserves_ret2libc_runtime_flow() -> None:
+    source = """
+from chun import CHun
+from pwn import p64
+
+s = CHun.script("./chall").start()
+leak = s.recv_leak("puts", "puts: ", offset=0)
+s.infer.libc_base_from_symbol_leak("puts", symbol_offset=s.libc.sym["puts"])
+s.sendline(p64(s.resolve.symbol("system")))
+"""
+
+    compiler = build_compiler()
+    ir = compiler.compile_source(source, module_name="exp")
+    transcript = compiler.build_module_transcript(ir)
+
+    assert [item.kind for item in transcript.primitives] == [
+        "checkpoint",
+        "session_init",
+        "assign",
+        "call",
+        "sendline",
+    ]
+    assert transcript.primitives[1].metadata["bind_target"] == "s"
+    assert transcript.primitives[2].metadata["target"] == "leak"
+    assert isinstance(transcript.primitives[2].payload, AnalysisNode)
+    assert isinstance(transcript.primitives[3].payload, AnalysisNode)
+
+
 def test_build_transcript_from_top_level_block_keeps_order_stable() -> None:
     source = """
 s.sendline(b"A")

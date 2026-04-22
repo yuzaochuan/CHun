@@ -23,6 +23,8 @@ WorkflowPrimitiveKind = Literal[
     "sendline",
     "expect",
     "recv",
+    "assign",
+    "call",
     "checkpoint",
 ]
 

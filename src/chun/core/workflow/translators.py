@@ -121,16 +121,16 @@ class PureExprTranslator(BaseCallTranslator):
                 value = u64(bytes(resolved_args[0]))
                 return True, int(value), "int", {"preview": str(int(value))}
             if callee.endswith(".encode"):
-                receiver = self._receiver_value(callee, args)
+                receiver = resolved_args[0] if resolved_args else self._receiver_value(callee, args)
                 if isinstance(receiver, str):
                     encoding = (
-                        str(resolved_args[0])
-                        if resolved_args
+                        str(resolved_args[1])
+                        if len(resolved_args) > 1
                         else str(resolved_kwargs.get("encoding", "utf-8"))
                     )
                     errors = (
-                        str(resolved_args[1])
-                        if len(resolved_args) > 1
+                        str(resolved_args[2])
+                        if len(resolved_args) > 2
                         else str(resolved_kwargs.get("errors", "strict"))
                     )
                     value = receiver.encode(encoding, errors)
@@ -339,6 +339,10 @@ class WorkflowTranslatorRegistry:
         )
         self.register_suffix(".infer.search_libc", AnalysisCallTranslator())
         self.register_suffix(".infer.libc_base_from", AnalysisCallTranslator())
+        self.register_suffix(".infer.libc_base_from_symbol_leak", AnalysisCallTranslator())
+        self.register_suffix(".recv_leak", AnalysisCallTranslator())
+        self.register_suffix(".resolve.libc_base_from_elf_symbol", AnalysisCallTranslator())
+        self.register_suffix(".resolve.symbol_via_dynelf", AnalysisCallTranslator())
         self.register_suffix(".search_libc", AnalysisCallTranslator())
         self.register_suffix(".libc_base_from", AnalysisCallTranslator())
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .core.models import AnalysisNode, CallNode, ExprNode, LiteralNode, NameRefNode, OpaqueCallNode, WorkflowTranscript
 from .core.workflow import ExploitWorkflowCompiler, WorkflowExecutor, WorkflowJsonCodec
 
 
@@ -63,6 +64,7 @@ def cmd_workflow_export(exp_path: str, *, entry: str | None = None, out_dir: str
     print(f"workflow: {workflow_path}")
     print(f"entry_action: {transcript.entry_action}")
     print(f"primitive_count: {len(transcript.primitives)}")
+    _print_workflow_payload_warnings(transcript)
     return 0
 
 
@@ -84,6 +86,7 @@ def cmd_workflow_show(exp_path: str, *, entry: str | None = None) -> int:
     print(f"entrypoints: {', '.join(ir.entrypoints)}")
     print(f"transcript_entry: {transcript.entry_action}")
     print(f"primitive_count: {len(transcript.primitives)}")
+    _print_workflow_payload_warnings(transcript)
     return 0
 
 
@@ -115,6 +118,54 @@ def _normalize_entry(entry: str | None, *, module_name: str) -> str | None:
     if "." in entry:
         return entry
     return f"{module_name}.{entry}"
+
+
+def _unresolved_payload_preview(payload: object) -> str | None:
+    source_text = getattr(payload, "metadata", {}).get("source_text")
+    if isinstance(source_text, str) and source_text:
+        return source_text
+    if isinstance(payload, LiteralNode) and payload.value_type == "expr_source":
+        return str(payload.value)
+    callee = getattr(payload, "callee", None)
+    if isinstance(callee, str) and callee:
+        return callee
+    return None
+
+
+def _find_unresolved_payloads(transcript: WorkflowTranscript) -> list[tuple[int, str, str]]:
+    unresolved: list[tuple[int, str, str]] = []
+    for index, primitive in enumerate(transcript.primitives):
+        if primitive.kind not in {"session_init", "send", "sendline", "expect", "assign", "call"}:
+            continue
+        payload = primitive.payload
+        if _workflow_payload_supported(payload):
+            continue
+        preview = _unresolved_payload_preview(payload) or type(payload).__name__
+        unresolved.append((index, primitive.kind, preview))
+    return unresolved
+
+
+def _workflow_payload_supported(payload: object) -> bool:
+    if isinstance(payload, (bytes, bytearray, str, int, float, bool, type(None))):
+        return True
+    if isinstance(payload, LiteralNode):
+        return True
+    if isinstance(payload, NameRefNode):
+        return True
+    if isinstance(payload, ExprNode):
+        return payload.evaluated or bool(payload.metadata.get("source_text"))
+    if isinstance(payload, (AnalysisNode, OpaqueCallNode, CallNode)):
+        return bool(payload.metadata.get("source_text"))
+    return False
+
+
+def _print_workflow_payload_warnings(transcript: WorkflowTranscript) -> None:
+    unresolved = _find_unresolved_payloads(transcript)
+    if not unresolved:
+        return
+    print(f"warning: found {len(unresolved)} unresolved workflow payload(s); replay may fail")
+    for index, kind, preview in unresolved[:5]:
+        print(f"  - step {index} [{kind}]: {preview}")
 
 
 def main(argv: list[str] | None = None) -> int:

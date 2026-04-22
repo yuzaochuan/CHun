@@ -169,13 +169,21 @@ transcript = compiler.build_transcript(ir, "exp.menu")
 
 输出 `WorkflowTranscript`，内部是 runtime 真正消费的 `WorkflowPrimitive` 序列。
 
-第一版稳定 primitive 集合是：
+现在的 transcript 不再只是“冻结后的 send/recv 字节流”，而是“可执行流程”：
+
+- IO primitive 仍然保留
+- 运行期赋值也保留
+- 会影响 Registry / 运行期状态的分析调用也保留
+
+当前 primitive 集合是：
 
 - `session_init`
 - `send`
 - `sendline`
 - `expect`
 - `recv`
+- `assign`
+- `call`
 - `checkpoint`
 
 这层会把诸如：
@@ -183,7 +191,16 @@ transcript = compiler.build_transcript(ir, "exp.menu")
 - `sla` -> `expect` + `sendline`
 - `sa` -> `expect` + `send`
 
-折叠成稳定 transcript，而不会继续带着 Python AST 去执行。
+折叠成稳定 transcript。同时：
+
+- `s = CHun.script(...).start()`
+  - 会变成 `session_init`，并把 session 重新绑定回原脚本变量名
+- `leak = s.recv_leak(...)`
+  - 会变成 `assign`
+- `s.infer.libc_base_from_symbol_leak(...)`
+  - 会变成 `call`
+
+因此 ret2libc 这类“先 leak，再 infer，再 resolve，再 pack”的数据流不会在导出期被错误快照化。
 
 ### `build_module_transcript()`
 
@@ -211,6 +228,35 @@ WorkflowJsonCodec.dump_transcript(transcript, "./exp.workflow.json")
 
 `WorkflowJsonCodec.load_transcript(...)` 可以直接把导出的 transcript 读回 `WorkflowTranscript`，再交给 `WorkflowExecutor` 执行。
 
+### 当前 replay 边界
+
+`workflow run` 现在优先回放“流程”，而不是只回放导出期已经求值完成的 payload。
+
+稳定支持的场景包括：
+
+- 字面量 `bytes` / `str`
+- `flat()` / `p64()` / `str(...).encode()` 这类在导出期已经能求值的 pure 构造器
+- 本地 helper 的简单 `return`，只要最终仍能收敛到可求值的 pure 表达式
+- `recv_leak -> infer.* -> resolve.* -> p64/flat/拼接` 这类依赖运行期 Registry / session 状态的 ret2libc 流程
+- 依赖脚本变量绑定的表达式，例如 `leak`、`s`、`idx`
+
+执行期现在会维护一份 live env，并把脚本变量重新绑定到 workflow runtime 中：
+
+- `session_init` 会把 `s` 这类脚本变量绑定回 script façade
+- `assign` 会把返回值写回 env
+- `call` 会按当前 env + session 执行分析/推导步骤
+- `send` / `sendline` / `expect` 的 payload 会在真正发送前按 live env 求值
+
+因此像：
+
+- `p64(s.resolve.symbol("system"))`
+- `b"a" * 8 + p64(s.resolve.symbol("__free_hook"))`
+- `s.infer.libc_base_from_symbol_leak(..., symbol_offset=s.libc.sym["puts"])`
+
+现在都可以延迟到 `workflow run` 时再求值，而不是在 `workflow export` 时就强行冻结。
+
+当前仍然有边界，但已经从“动态 payload 全不支持”收缩成“无法在 runtime façade / 受控 eval 环境里解释的调用仍需显式补 translator 或 façade 能力”。也就是说，问题不再是 ret2libc 的动态地址本身，而是某个具体调用是否已经被纳入 workflow runtime 的语义面。
+
 ## Runtime / Executor
 
 执行期主体位于 `src/chun/core/workflow/`：
@@ -234,6 +280,8 @@ WorkflowJsonCodec.dump_transcript(transcript, "./exp.workflow.json")
 - `binary`
 - `cwd`
 - `libc/ld/env/log_level` 等 launcher 参数
+
+如果导出期没有显式写出 `libc=...`，`workflow run` 的 `ProcessLauncher` 还会像脚本态 `CHun.script(...).start()` 一样，尝试从 `ELF(binary).libc` 自动推断并绑定 `session.libc_elf`。这样 `s.libc.sym[...]` 这类脚本态访问在 replay 时仍然成立。
 
 这样 `chun workflow run ./exp.workflow.json` 不必重新解析原始 exp，也能在新的 session 中稳定起本地 process。
 

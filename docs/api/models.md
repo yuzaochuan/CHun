@@ -245,9 +245,9 @@ workflow 相关 DTO 现在拆成了两组。
 - `WorkflowCheckpoint`
   - workflow 执行期检查点
 - `WorkflowPrimitive`
-  - runtime 真正执行的 primitive；当前第一版支持 `session_init`、`send`、`sendline`、`expect`、`recv`、`checkpoint`
+  - runtime 真正执行的 primitive；当前第一版支持 `session_init`、`send`、`sendline`、`expect`、`recv`、`assign`、`call`、`checkpoint`
 - `WorkflowTranscript`
-  - 某个入口块/函数展开后的 primitive 序列
+  - 某个入口块/函数展开后的流程序列；不仅保留 IO primitive，也保留运行期变量绑定与分析调用
 - `WorkflowStepReceipt`
   - 单步执行后的结构化回执
 - `WorkflowExecutionResult`

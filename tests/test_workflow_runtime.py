@@ -3,8 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from chun import (
+    AnalysisNode,
     CHunSession,
     ContextKind,
+    ExprNode,
+    LiteralNode,
     ProcessLauncher,
     ProcessWorkflowRuntime,
     RecordDomain,
@@ -16,6 +19,7 @@ from chun import (
     WorkflowStepReceipt,
     WorkflowTranscript,
 )
+from pwnlib.util.packing import p64
 
 
 class DummyWorkflowTransport:
@@ -154,3 +158,124 @@ def test_process_launcher_delegates_to_chun_process(monkeypatch) -> None:
     assert launched is not None
     assert captured["binary"] == "./chall"
     assert captured["kwargs"]["argv"] == ["./chall", "arg"]
+
+
+def test_process_launcher_binds_inferred_libc_from_binary(monkeypatch, tmp_path) -> None:
+    session = CHunSession(
+        target=TargetSpec(kind="process", binary="./chall"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyWorkflowTransport(),
+    )
+
+    def fake_process(_binary: str, **_kwargs: object) -> CHunSession:
+        return session
+
+    chall_path = tmp_path / "chall"
+    chall_path.write_bytes(b"\x7fELF")
+    libc_path = tmp_path / "libc.so.6"
+    libc_path.write_bytes(b"\x7fELF")
+    fake_libc = SimpleNamespace(path=str(libc_path), sym={"puts": 0x80000})
+    fake_elf = SimpleNamespace(path=str(chall_path), libc=fake_libc)
+
+    def fake_elf_loader(path: str, checksec: bool = False) -> object:
+        assert checksec is False
+        if path == str(chall_path):
+            return fake_elf
+        if path == str(libc_path):
+            return fake_libc
+        raise AssertionError(path)
+
+    monkeypatch.setattr("chun.core.workflow.launchers.CHun.process", fake_process)
+    monkeypatch.setattr("chun.core.workflow.launchers.ELF", fake_elf_loader)
+
+    launcher = ProcessLauncher(binary=str(chall_path))
+    launched = launcher.launch()
+
+    assert launched is session
+    assert session.elf is fake_elf
+    assert session.libc_elf is fake_libc
+
+
+def test_workflow_executor_replays_dynamic_ret2libc_flow() -> None:
+    expected_base = 0x7F1234500000
+    expected_system = expected_base + 0x4C490
+
+    class Ret2libcLauncher(DummyLauncher):
+        def launch(self, primitive: object | None = None) -> CHunSession:
+            session = super().launch(primitive)
+            state: dict[str, int | None] = {"base": None}
+            self.transport.recv_queue = [b"puts: ", (expected_base + 0x80000).to_bytes(8, "little")]
+            session.bind_binaries(libc_elf=SimpleNamespace(sym={"puts": 0x80000}))
+
+            def fake_infer(name: str, *, symbol_offset: int) -> SimpleNamespace:
+                assert name == "puts"
+                assert symbol_offset == 0x80000
+                state["base"] = expected_base
+                return SimpleNamespace(value=expected_base)
+
+            def fake_symbol(symbol: str) -> int:
+                assert symbol == "system"
+                assert state["base"] == expected_base
+                return expected_system
+
+            session.infer = SimpleNamespace(libc_base_from_symbol_leak=fake_infer)
+            session.resolve = SimpleNamespace(symbol=fake_symbol)
+            return session
+
+    transcript = WorkflowTranscript(
+        entry_action="exp.__block__.0",
+        primitives=(
+            WorkflowPrimitive(kind="session_init", payload="./chall", metadata={"bind_target": "s"}),
+            WorkflowPrimitive(
+                kind="assign",
+                payload=AnalysisNode(
+                    callee="s.recv_leak",
+                    metadata={"source_text": 's.recv_leak("puts", "puts: ", offset=0)'},
+                ),
+                metadata={"target": "leak"},
+            ),
+            WorkflowPrimitive(
+                kind="call",
+                payload=AnalysisNode(
+                    callee="s.infer.libc_base_from_symbol_leak",
+                    metadata={
+                        "source_text": 's.infer.libc_base_from_symbol_leak("puts", symbol_offset=s.libc.sym["puts"])'
+                    },
+                ),
+            ),
+            WorkflowPrimitive(
+                kind="sendline",
+                payload=LiteralNode(
+                    value='p64(s.resolve.symbol("system"))',
+                    value_type="expr_source",
+                ),
+            ),
+        ),
+    )
+
+    launcher = Ret2libcLauncher()
+    result = WorkflowExecutor(runtime=ProcessWorkflowRuntime()).execute(
+        transcript,
+        launcher=launcher,
+    )
+
+    assert result.total_steps == 4
+    assert launcher.transport.sent == [("sendline", p64(expected_system))]
+
+
+def test_process_runtime_reports_unresolved_expr_payload_clearly() -> None:
+    runtime = ProcessWorkflowRuntime()
+    unresolved = ExprNode(
+        kind="call",
+        callee="p64",
+        metadata={"source_text": 'p64(s.resolve.symbol("system"))'},
+    )
+
+    try:
+        runtime._coerce_bytes(unresolved)
+    except TypeError as exc:
+        assert str(exc) == (
+            'workflow payload is not bytes-compatible: ExprNode(p64(s.resolve.symbol("system")))'
+        )
+    else:
+        raise AssertionError("expected TypeError for unresolved workflow payload")
