@@ -45,6 +45,7 @@ class FmtOffsetProbe:
         sep: bytes | None = None,
         signature: bytes | None = None,
         store: bool = True,
+        store_fact: bool = True,
         source: str = "fmt.probe",
     ) -> FmtOffsetProbeResult:
         return self.discover_offset(
@@ -56,6 +57,7 @@ class FmtOffsetProbe:
             sep=sep,
             signature=signature,
             store=store,
+            store_fact=store_fact,
             source=source,
         )
 
@@ -71,6 +73,7 @@ class FmtOffsetProbe:
         sep: bytes | None = None,
         signature: bytes | None = None,
         store: bool = True,
+        store_fact: bool = True,
         source: str = "fmt.probe",
     ) -> FmtOffsetProbeResult:
         resolved_mode = FmtOffsetProbeMode(mode)
@@ -108,7 +111,7 @@ class FmtOffsetProbe:
             )
 
         if store:
-            self._store_result(session, result, payload=payload)
+            self._store_result(session, result, payload=payload, store_fact=store_fact)
 
         return result
 
@@ -204,6 +207,7 @@ class FmtOffsetProbe:
         result: FmtOffsetProbeResult,
         *,
         payload: bytes,
+        store_fact: bool,
     ) -> None:
         session.rec.record_observation(
             "fmt.offset.response",
@@ -236,7 +240,7 @@ class FmtOffsetProbe:
             },
             overwrite=True,
         )
-        if result.index is not None:
+        if result.index is not None and store_fact:
             session.rec.record_fact(
                 "fmt.offset",
                 result.index,

@@ -61,6 +61,46 @@
 - `tag`
 - `source`
 
+## Replay Trace（热路径）
+
+`EvidenceRegistry` 现在内置一套 compact replay recorder，用于低开销记录“可重放最小前缀”，而不是 full workflow。
+
+默认只记录外部 effect 事件：
+
+- `spawn`
+- `send`
+- `sendline`
+- `expect`（`recvuntil` 同步锚点）
+- `checkpoint`
+
+对应 API：
+
+- `append_event(...)`
+- `checkpoint(name, ...)`
+- `slice_to_here(from_checkpoint=...)`
+- `replay(...)`
+
+这里的大 payload 不直接内联到 event 里，而是通过 blob ref 去重引用。
+
+### Observation 验证与晋升
+
+新增最小闭环：
+
+- `validate_observation(...)`
+  - 基于 replay slice + probe + predicate 做独立会话验证
+  - 会回写 observation metadata：
+    - `verification_status`
+    - `verified_by`
+    - `verification_reason`
+- `promote_observation_to_fact(...)`
+  - 把 observation 显式晋升为 fact
+
+推荐语义是：
+
+1. 先写 observation（例如 `fmt.offset.candidate`）
+2. 按需触发验证
+3. 验证通过后再晋升 `fmt.offset` fact
+
 ## 快照与打印
 
 `EvidenceRegistry` 现在还提供一组面向调试和运行期观测的公共接口：

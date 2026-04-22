@@ -92,6 +92,17 @@ from .models import (
     WorkflowTranscript,
 )
 from .registry import EvidenceRegistry
+from .replay import (
+    InMemoryBlobStore,
+    PayloadRef,
+    ReplayCheckpoint,
+    ReplayEvent,
+    ReplayEventKind,
+    ReplayExecutor,
+    ReplayRecorder,
+    VerificationResult,
+    VerificationRun,
+)
 from .resolve import DynELFResolver, ResolveService
 from .session import CHunSession
 from .workflow import (
@@ -171,10 +182,16 @@ __all__ = [
     "Observation",
     "ObservationKind",
     "OpaqueCallNode",
+    "PayloadRef",
     "PrimitiveNode",
     "ProcessLauncher",
     "ProcessWorkflowRuntime",
     "PwntoolsGdbBridge",
+    "ReplayCheckpoint",
+    "ReplayEvent",
+    "ReplayEventKind",
+    "ReplayExecutor",
+    "ReplayRecorder",
     "RecordDomain",
     "RecursiveCallNode",
     "RegistryConflictError",
@@ -206,4 +223,7 @@ __all__ = [
     "WorkflowStepReceipt",
     "WorkflowTranscript",
     "WorkflowTranslatorRegistry",
+    "VerificationResult",
+    "VerificationRun",
+    "InMemoryBlobStore",
 ]

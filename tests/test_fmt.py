@@ -505,6 +505,101 @@ def test_fmt_service_find_offset_logs_when_enabled(
     assert session.rec.get_artifact("fmt.offset.probe") is not None
 
 
+def test_fmt_find_offset_verify_promotes_fact_only_on_passed_verification() -> None:
+    signature = b"CHun"
+    signature_hex = format(int.from_bytes(signature, "little"), "x").encode()
+    session = build_probe_session(b"CHun0xaaa.0x" + signature_hex + b".0xccc")
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+    replay_sessions: list[CHunSession] = []
+
+    def _factory() -> CHunSession:
+        replay = build_exec_session(b"aabb0x62626161\n")
+        replay_sessions.append(replay)
+        return replay
+
+    session.replay_session_factory = _factory
+
+    result = session.fmt.find_offset(verify=True, verify_marker=b"aabb")
+
+    assert result.index == 2
+    assert result.verified is True
+    fact = session.rec.get_fact("fmt.offset")
+    assert fact is not None
+    assert fact.value == 2
+    assert fact.source == "fmt.verify"
+    observation = session.rec.get_observation("fmt.offset.candidate")
+    assert observation is not None
+    assert observation.metadata["verification_status"] == "passed"
+    assert replay_sessions
+    sent = replay_sessions[0].transport.sent  # type: ignore[attr-defined]
+    assert sent == [("sendline", b"aabb%2$p")]
+
+
+def test_fmt_find_offset_verify_does_not_promote_fact_on_failed_verification() -> None:
+    signature = b"CHun"
+    signature_hex = format(int.from_bytes(signature, "little"), "x").encode()
+    session = build_probe_session(b"CHun0xaaa.0x" + signature_hex + b".0xccc")
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+    session.replay_session_factory = lambda: build_exec_session(b"no-pointer-here\n")
+
+    result = session.fmt.find_offset(verify=True, verify_marker=b"aabb")
+
+    assert result.index == 2
+    assert result.verified is False
+    assert session.rec.get_fact("fmt.offset") is None
+    observation = session.rec.get_observation("fmt.offset.candidate")
+    assert observation is not None
+    assert observation.metadata["verification_status"] == "failed"
+
+
+def test_fmt_verify_probe_output_accepts_marker_prefix_in_pointer_text() -> None:
+    output = b"Hello, aabb0x7024362562626161\n"
+    assert FmtService._verify_probe_output(
+        output,
+        marker=b"aabb",
+        pointer_size=8,
+        endian="little",
+    )
+
+
+def test_fmt_find_offset_verify_logs_progress_when_loginfo_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signature = b"CHun"
+    signature_hex = format(int.from_bytes(signature, "little"), "x").encode()
+    session = build_probe_session(b"CHun0xaaa.0x" + signature_hex + b".0xccc")
+    session.rec.set_context("arch.bits", 32, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+    session.replay_session_factory = lambda: build_exec_session(b"aabb0x62626161\n")
+    messages: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        fmt_service_mod.log,
+        "success",
+        lambda message: messages.append(("success", message)),
+    )
+    monkeypatch.setattr(
+        fmt_service_mod.log,
+        "info",
+        lambda message: messages.append(("info", message)),
+    )
+    monkeypatch.setattr(
+        fmt_service_mod.log,
+        "warning",
+        lambda message: messages.append(("warning", message)),
+    )
+
+    result = session.fmt.find_offset(verify=True, verify_marker=b"aabb", loginfo=True)
+
+    assert result.verified is True
+    assert any(
+        level == "success" and message.startswith("fmt offset verify result: ")
+        for level, message in messages
+    )
+
+
 def test_fmt_blind_facade_defaults_to_atom_tasks() -> None:
     session = build_session()
     session.bind_binaries(

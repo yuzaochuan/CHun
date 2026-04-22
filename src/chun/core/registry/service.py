@@ -7,6 +7,14 @@ from enum import Enum
 from typing import Any, Callable, Iterable, Literal, TypeVar, cast
 
 from ..._compat import log
+from ..replay import (
+    ReplayCheckpoint,
+    ReplayEvent,
+    ReplayEventKind,
+    ReplayExecutor,
+    ReplayRecorder,
+    VerificationResult,
+)
 
 from ..errors import RegistryConflictError
 from ..models import (
@@ -54,6 +62,7 @@ class EvidenceRegistry:
         self.facts: dict[str, Fact] = {}
         self.artifacts: dict[str, Artifact] = {}
         self.context: dict[str, ContextEntry] = {}
+        self.replay: ReplayRecorder = ReplayRecorder()
 
     def _store(self, bucket: dict[str, T], record: T, *, overwrite: bool) -> T:
         if not overwrite and record.name in bucket:
@@ -632,12 +641,171 @@ class EvidenceRegistry:
             emitter(line)
         return lines
 
+    def append_event(
+        self,
+        kind: ReplayEventKind | str,
+        *,
+        payload: bytes | None = None,
+        drop: bool = False,
+        metadata: dict[str, object] | None = None,
+    ) -> ReplayEvent:
+        """记录一条 compact replay event。"""
+        return self.replay.append_event(
+            kind,
+            payload=payload,
+            drop=drop,
+            metadata=metadata or {},
+        )
+
+    def checkpoint(
+        self,
+        name: str,
+        *,
+        metadata: dict[str, object] | None = None,
+    ) -> ReplayCheckpoint:
+        """记录 replay checkpoint。"""
+        return self.replay.checkpoint(name, metadata=metadata or {})
+
+    def slice_to_here(self, *, from_checkpoint: str | None = None) -> tuple[ReplayEvent, ...]:
+        """返回当前 replay trace 的可重放切片。"""
+        return self.replay.slice_to_here(from_checkpoint=from_checkpoint)
+
+    def promote_observation_to_fact(
+        self,
+        observation_name: str,
+        *,
+        fact_name: str | None = None,
+        kind: FactKind = FactKind.DERIVED,
+        source: str = "observation.promote",
+        confidence: float | None = None,
+        domain: RecordDomain | None = None,
+        evidence: list[str] | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, object] | None = None,
+        overwrite: bool = True,
+    ) -> Fact:
+        """把 observation 升级为 fact。"""
+        observation = self.require_observation(observation_name)
+        fact_domain = observation.domain if domain is None else domain
+        fact_confidence = observation.confidence if confidence is None else confidence
+        fact_tags = list(observation.tags)
+        if tags:
+            for tag in tags:
+                if tag not in fact_tags:
+                    fact_tags.append(tag)
+        fact_metadata = dict(observation.metadata)
+        fact_metadata.update(metadata or {})
+        fact_metadata.setdefault("promoted_from", observation_name)
+        return self.record_fact(
+            fact_name or observation_name,
+            observation.value,
+            kind=kind,
+            domain=fact_domain,
+            source=source,
+            confidence=fact_confidence,
+            evidence=list(evidence or [observation_name]),
+            tags=fact_tags,
+            metadata=fact_metadata,
+            overwrite=overwrite,
+        )
+
+    def _update_observation_metadata(
+        self,
+        observation_name: str,
+        *,
+        metadata_patch: dict[str, object],
+        overwrite: bool = True,
+    ) -> Observation:
+        observation = self.require_observation(observation_name)
+        metadata = dict(observation.metadata)
+        metadata.update(metadata_patch)
+        return self.record_observation(
+            observation.name,
+            observation.value,
+            kind=observation.kind,
+            domain=observation.domain,
+            source=observation.source,
+            confidence=observation.confidence,
+            tags=list(observation.tags),
+            metadata=metadata,
+            overwrite=overwrite,
+        )
+
+    def validate_observation(
+        self,
+        observation_name: str,
+        *,
+        session_factory: Callable[[], object],
+        executor: ReplayExecutor,
+        probe: bytes,
+        predicate: Callable[[bytes], bool],
+        from_checkpoint: str | None = None,
+        end_seq_exclusive: int | None = None,
+        promote_to_fact: bool = True,
+        fact_name: str | None = None,
+        fact_kind: FactKind = FactKind.DERIVED,
+        fact_source: str = "observation.verify",
+        fact_confidence: float | None = None,
+    ) -> VerificationResult:
+        """基于 replay trace 验证 observation，并可选自动晋升 fact。"""
+        trace = self.slice_to_here(from_checkpoint=from_checkpoint)
+        if end_seq_exclusive is not None:
+            trace = tuple(event for event in trace if event.seq < end_seq_exclusive)
+        result = executor.replay(
+            trace,
+            session_factory=session_factory,
+            probe=probe,
+            predicate=predicate,
+        )
+        self._update_observation_metadata(
+            observation_name,
+            metadata_patch={
+                "verification_status": "passed" if result.ok else "failed",
+                "verified_by": result.run_id,
+                "verification_reason": result.reason,
+                "verification_output_preview": result.output_preview,
+            },
+        )
+        if result.ok and promote_to_fact:
+            self.promote_observation_to_fact(
+                observation_name,
+                fact_name=fact_name,
+                kind=fact_kind,
+                source=fact_source,
+                confidence=fact_confidence,
+                metadata={"validated_by": result.run_id},
+                overwrite=True,
+            )
+        return result
+
+    def replay(
+        self,
+        *,
+        session_factory: Callable[[], object],
+        executor: ReplayExecutor,
+        probe: bytes,
+        predicate: Callable[[bytes], bool],
+        from_checkpoint: str | None = None,
+    ) -> VerificationResult:
+        """直接执行 replay + probe，不触发 observation/fact 语义。"""
+        trace = self.slice_to_here(from_checkpoint=from_checkpoint)
+        return executor.replay(
+            trace,
+            session_factory=session_factory,
+            probe=probe,
+            predicate=predicate,
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {
             "observations": {name: asdict(item) for name, item in self.observations.items()},
             "facts": {name: asdict(item) for name, item in self.facts.items()},
             "artifacts": {name: asdict(item) for name, item in self.artifacts.items()},
             "context": {name: asdict(item) for name, item in self.context.items()},
+            "replay": {
+                "events": [asdict(event) for event in self.replay.iter_events()],
+                "checkpoints": {name: asdict(item) for name, item in self.replay.checkpoints.items()},
+            },
         }
 
 __all__ = ["EvidenceRegistry"]

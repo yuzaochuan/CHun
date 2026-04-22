@@ -298,6 +298,10 @@ class ScriptEntry:
         """访问 session 的 fmt 服务。"""
         return _ScriptFmtFacade(self.session.fmt)
 
+    def checkpoint(self, name: str, *, metadata: dict[str, object] | None = None) -> object:
+        """在 replay trace 中打一个手工检查点。"""
+        return self.session.checkpoint(name, metadata=metadata or {})
+
     def send(self, data: bytes) -> None:
         """转发到当前 `io.send()`。"""
         self.io.send(data)
