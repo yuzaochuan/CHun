@@ -61,6 +61,133 @@
 - `tag`
 - `source`
 
+## 快照与打印
+
+`EvidenceRegistry` 现在还提供一组面向调试和运行期观测的公共接口：
+
+- `snapshot(...)`
+- `render(...)`
+- `show(...)`
+
+推荐分工：
+
+- `snapshot(...)`
+  - 返回结构化快照
+  - 适合 CLI / workflow / 业务逻辑二次处理
+- `render(...)`
+  - 返回可直接展示的文本行
+  - 适合测试、dry-run、上层自定义输出
+- `show(...)`
+  - 直接通过 `log.debug/info/warning` 输出
+  - 适合 `session.rec.show(...)` 这种会话期排障入口
+
+### 分层筛选优先于日志等级
+
+这组接口的主筛选维度是 `layers`，而不是日志等级。
+
+可选层固定为四类：
+
+- `context`
+- `observations`
+- `facts`
+- `artifacts`
+
+默认顺序也是：
+
+1. `context`
+2. `observations`
+3. `facts`
+4. `artifacts`
+
+这表示：
+
+- 先决定“看哪几层”
+- 再决定“展开到多详细”
+- 最后才决定“以什么日志级别打出去”
+
+### 关键参数
+
+- `layers=...`
+  - 选择输出哪些层
+  - 支持单个字符串或元组，例如 `layers="facts"`、`layers=("context", "facts")`
+- `detail=...`
+  - 控制详细度
+  - 可选：`compact` / `standard` / `verbose`
+- `emit=...`
+  - 只影响 `show(...)` 用什么日志级别输出
+  - 可选：`debug` / `info` / `warning`
+- `artifact_mode=...`
+  - 控制 artifact 的值如何展示
+  - 可选：`summary` / `repr` / `skip`
+- `domain=...` / `source=...` / `tag=...`
+  - 复用 registry 现有过滤语义
+- `limit=...`
+  - 按层裁剪记录数，而不是全局裁剪
+
+### 推荐用法
+
+快速查看当前会话最关键的上下文和事实：
+
+```python
+session.rec.show(
+    layers=("context", "facts"),
+    detail="standard",
+)
+```
+
+只看 workflow 相关事实，并用 `debug` 级别打出：
+
+```python
+session.rec.show(
+    layers=("context", "observations", "facts"),
+    domain=RecordDomain.WORKFLOW,
+    emit="debug",
+)
+```
+
+只取结构化快照，不立即打印：
+
+```python
+snapshot = session.rec.snapshot(
+    layers=("facts", "artifacts"),
+    domain=RecordDomain.LIBC,
+    limit=5,
+)
+```
+
+### 输出示例
+
+`detail="standard"`：
+
+```text
+[Registry] ctx=1 obs=1 facts=2 arts=0 total=4
+[Context]
+workflow.current_checkpoint      pwn3.menu kind=session domain=workflow src=session
+[Observations]
+__malloc_hook                    0x7f3a2c8f4be0 kind=symbol-leak domain=libc src=leak conf=0.70
+[Facts]
+libc.base                        0x7f3a2c875000 kind=base-address domain=libc src=infer conf=0.95
+resolved.system                  0x7f3a2c8c1490 kind=symbol-address domain=resolve src=resolve conf=0.90
+```
+
+`detail="verbose"`：
+
+```text
+[Registry] ctx=0 obs=0 facts=1 arts=0 total=1
+[Facts]
+name        libc.base
+value       0x7f3a2c875000
+kind        base-address
+domain      libc
+source      infer.libc_base_from_symbol_leak
+confidence  0.95
+evidence    __malloc_hook
+metadata    {'symbol_offset': 0x1ebb70}
+ts          2026-04-22T12:34:56+00:00
+```
+
+如果 `artifact_mode="skip"`，artifact 只参与原始 registry 存储，不参与本次展示。
+
 如果你希望在业务侧拿到“不可空且值类型明确”的结果，而不是自己手写 `None` 判断和 `isinstance(...)`，可以使用严格读取 helper：
 
 - `require_observation(name)`
@@ -168,5 +295,6 @@
 - 类型名使用 `EvidenceRegistry`
 - 会话内访问优先使用 `session.registry`
 - 需要短写时使用 `session.rec`
+- 需要快速查看当前记录时，优先使用 `session.rec.show(...)`
 
 不再把额外别名当作长期公开接口。

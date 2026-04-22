@@ -36,9 +36,15 @@
 
 详见：[FMT API](fmt.md)
 
+## Workflow / Action IR
+
+职责：把 exploit 脚本稳定转成 `top-level block + function def + call edge + primitive` 的 action IR，并按需展开成 replay 可消费的 transcript；同时提供第一版本地 process runtime / launcher / executor，以及 `chun workflow export/run` 的 JSON 导出执行闭环。
+
+详见：[Workflow API](workflow.md)
+
 ## 数据模型与枚举
 
-职责：提供 `TargetSpec` / `TransportSpec`、Registry 相关数据模型、FMT 计划模型，以及 libc catalog 的结构化查询结果对象。
+职责：提供 `TargetSpec` / `TransportSpec`、Registry 相关数据模型、FMT 计划模型、Workflow / Action IR 结构，以及 libc catalog 的结构化查询结果对象。
 
 详见：[Models API](models.md)
 

@@ -36,6 +36,7 @@ class RecordDomain(str, Enum):
     WEBSOCKET = "websocket"
     DEBUGGER = "debugger"
     TEMPLATE = "template"
+    WORKFLOW = "workflow"
 
 
 class ObservationKind(str, Enum):
