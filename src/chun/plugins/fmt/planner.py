@@ -40,7 +40,7 @@ class DefaultFmtWritePlanner:
         task_policy: FmtTaskPolicy,
         backend: str = "pwntools",
         write_size: str | None = None,
-        write_size_max: str = "long",
+        write_size_max: str | None = None,
         overflows: int = 16,
         backend_strategy: str = "small",
         badbytes: bytes | bytearray | Sequence[int] = (),
@@ -57,6 +57,11 @@ class DefaultFmtWritePlanner:
                 if write_size is not None
                 else self._infer_backend_write_size(requests)
             )
+            resolved_write_size_max = (
+                write_size_max
+                if write_size_max is not None
+                else self._infer_backend_write_size_max(requests)
+            )
             return self._pwntools.build_plan(
                 requests,
                 bits=bits,
@@ -64,7 +69,7 @@ class DefaultFmtWritePlanner:
                 pointer_size=normalized_pointer_size,
                 task_policy=task_policy,
                 write_size=resolved_write_size,
-                write_size_max=write_size_max,
+                write_size_max=resolved_write_size_max,
                 overflows=overflows,
                 strategy=backend_strategy,
                 badbytes=badbytes,
@@ -99,6 +104,23 @@ class DefaultFmtWritePlanner:
             if strategy == FmtWriteStrategy.INT:
                 return "int"
         return "short"
+
+    @staticmethod
+    def _infer_backend_write_size_max(requests: Sequence[FmtWriteRequest]) -> str:
+        if not requests:
+            return "long"
+        strategies = {request.strategy for request in requests}
+        if len(strategies) == 1:
+            strategy = next(iter(strategies))
+            if strategy == FmtWriteStrategy.BYTE:
+                return "byte"
+            if strategy == FmtWriteStrategy.SHORT:
+                return "short"
+            if strategy == FmtWriteStrategy.INT:
+                return "int"
+            if strategy == FmtWriteStrategy.PTR:
+                return "long"
+        return "long"
 
     def _normalize_pointer_size(self, pointer_size: int) -> FmtWordSize:
         if pointer_size not in (1, 2, 4, 8):

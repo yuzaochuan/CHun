@@ -35,6 +35,7 @@
 - `read()`
 - `write()` / `writes()`
 - `compare_write()`
+- `compare_writes()`
 
 写路径内部现在采用“两层架构”：
 
@@ -361,6 +362,24 @@ print(result.responses[0])
 - `SHORT`
 - `INT`
 
+其中 `BYTE` 现在默认是严格 byte-only 语义：
+
+- `write_size = "byte"`
+- `write_size_max = "byte"`
+- backend 不会再把相邻 byte atom 合并成 `%hn` / `%n`
+
+另外，整数值的总写入宽度现在按 strategy 分两类：
+
+- `AUTO` / `PTR`
+  - 默认按当前机器字宽展开
+  - 64 位按 8-byte，32 位按 4-byte
+  - 适合 GOT / 函数指针这类希望把高位 `0x00` 也纳入计划的场景
+- `BYTE` / `SHORT` / `INT`
+  - 默认只按最小有效字节数规划
+  - 更紧凑，也更接近手工 exploit 时“只改低位”的直觉
+
+如果你要显式覆盖总写入范围，仍然可以用 `value_bits` 或 `chunk_width`。
+
 示例：
 
 ```python
@@ -395,8 +414,9 @@ print(report)
   - 指定了 `buflen`，且本次实际发送长度不超过它
 - `❌`
   - 指定了 `buflen`，且本次实际发送长度超过它
+  - 或者当前方案的 `pad_time` 已经是 `EXTREME`
 - `❔`
-  - 没有提供 `buflen`
+  - 没有提供 `buflen`，且 `pad_time` 还没有到 `EXTREME`
 
 ### Script 门面
 
@@ -408,39 +428,111 @@ print(report)
 s.fmt.write(
     0x6010A0,
     0x601018,
+    b"name: ",
+    6,
     strategy="AUTO",
-    offset=6,
-    buflen=0x40,
     end=b"\n",
-).info(show_hex=True)
+).info(0x40, show_hex=True)
 
 s.fmt.write(
     0x6010A0,
     0x601018,
+    b"name: ",
+    6,
     strategy="BYTE",
-    offset=6,
-    buflen=0x40,
     end=b" ",
 ).send()
 ```
+
+如果你需要在 fmt 写入前面手工塞一段格式串头部，也可以只在 script 门面里用半自动模式：
+
+```python
+s.fmt.write(
+    0x6010A0,
+    0x601018,
+    b"name: ",
+    6,
+    strategy="AUTO",
+    head=b"%32$p",
+    head_numbwritten=14,
+).info(0x40)
+```
+
+这里的语义是：
+
+- `head`
+  - 直接拼到最终 fmt payload 前面
+- `head_numbwritten`
+  - 你手工告诉 CHun：这段 `head` 在运行时实际会打印多少字符
+  - CHun 再据此重算后续 `%hhn/%hn/%n` 的 padding 和 `data_offset`
+
+注意：
+
+- 这是 script-only 的半自动语法糖，不影响底层 `session.fmt.write()`
+- 当前只支持单 task 的 `write(...)` 发送链
+- 如果 `head` 里是 `%p/%s/%d` 这类动态输出，必须由你自己提供正确的 `head_numbwritten`
 
 当前 script 门面显式暴露这些高频参数：
 
 - `target`
 - `value`
-- `strategy`
+- `delim`
 - `offset`
+- `strategy`
 - `task_policy`
 - `data_offset`
-- `buflen`
 - `end`
 
 其中：
 
 - `.info()`
+  - 第一个位置参数可以直接传 `buflen`
   - 内部复用同一组参数，调用 `compare_write(...)`
 - `.send()`
   - 使用当前单一 `strategy` 真正执行发送
+  - script 门面这里是 send-only 语义，不会额外 `recv`
+  - 如果提供了 `delim`，会先 `recvuntil(delim)` 再发送
+  - 如果传了 `buflen`，会在发送前做一次软检查：超长时 `log.error(...)`，但不阻塞发送
+  - 如果当前方案的 `pad_time >= HIGH`，也会打印中文 `log.warning(...)`
+  - 如果后面还要手动 `s.recv()` / `s.recvuntil()`，就应该用这个入口
+
+多地址写也有对应的 script 门面：
+
+```python
+s.fmt.writes(
+    {
+        0x404018: 0x11223344,
+        0x404020: 0x55667788,
+    },
+    b"choice> ",
+    6,
+    strategy="SHORT",
+    task_policy="BY_TARGET",
+    end=b"\n",
+).info(0x80, show_hex=True)
+```
+
+`s.fmt.writes(...).send()` 与单目标版相同，也是 send-only 语义：
+
+- 只发送 payload
+- 如果提供了 `delim`，会先 `recvuntil(delim)` 再发送
+- 如果传了 `buflen`，会在发送前做一次软检查：超长时 `log.error(...)`，但不阻塞发送
+- 如果当前方案的 `pad_time >= HIGH`，也会打印中文 `log.warning(...)`
+- 不会提前消费后续响应
+- 适合你自己继续控制 `recv()` / `recvuntil()` 的脚本流程
+
+以及直接的多策略对照入口：
+
+```python
+s.fmt.compare_writes(
+    {
+        0x404018: 0x11223344,
+        0x404020: 0x55667788,
+    },
+    offset=6,
+    show_hex=True,
+)
+```
 
 当 `show_hex=True` 时，对照输出会额外打印 `send.hex`，使用类似 pwntools debug dump 的格式展示真正发送给目标的字节串（即 `payload + end`）。
 
@@ -460,6 +552,29 @@ s.fmt.write(
   - 多策略对照结果
 - `FmtWriteCandidate`
   - 单个 strategy 的候选结果
+
+### `compare_writes()`
+
+用于同一批写请求在多种 strategy 下做对照，不实际发送。
+
+```python
+report = session.fmt.compare_writes(
+    {
+        0x404018: 0x11223344,
+        0x404020: 0x55667788,
+    },
+    offset=6,
+)
+
+print(report)
+```
+
+`compare_writes()` 返回 `FmtWritesComparison`：
+
+- 头部是单行摘要，直接显示 request 数和前几个写入目标
+- 每个 strategy 仍然显示 `atoms / tasks / send / data@ / max_pad / pad_time`
+- 多 task 场景下，`fmt` 和 `payload` 会采用更紧凑的单行展示，给头部指标留更多空间
+- `show_hex=True` 时同样会打印 `send.hex`
 - `RenderedFmtTask`
   - 一次渲染结果
 - `FmtExecutionReceipt`

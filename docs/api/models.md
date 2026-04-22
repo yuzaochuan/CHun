@@ -121,6 +121,7 @@ FMT 的结构化 DTO 现在统一收口在 `src/chun/core/models/fmt.py`，而�
 - `FmtWritePlan`：描述 service 输出的完整计划。当前它表达的是 CHun 的计划对象，而不是自研 atom 优化器本体；会显式记录 `backend`、`offset`、`data_offset`，并额外暴露 `total_atoms`、`total_tasks` 与 `is_blind_safe`
 - `FmtWriteCandidate`：描述单个 strategy 下的写入候选，包含 `plan`、`rendered_tasks`、`error` 以及若干便于比较的聚合属性
 - `FmtWriteComparison`：描述同一目标/值在多种 strategy 下的对照结果；实现了 `__str__()`，可直接 `print(report)` 得到可读摘要，并支持基于 `buflen/end` 输出 `✅ / ❌ / ❔` 状态
+- `FmtWritesComparison`：描述同一批写请求在多种 strategy 下的对照结果，适合多地址写/GOT overwrite 的横向比较
 - `FmtRenderStep`：描述单个 atom 在 renderer 阶段的具体决策，包括 padding、arg index、specifier 与计数器推进
 - `RenderedFmtTask`：描述 renderer 产出的纯字节任务，显式区分 `fmt_bytes`、`data_bytes` 与最终 `payload`，并保留 `backend`、`layout`、初始/最终计数器
 - `FmtExecutionMethod`：描述 executor 最终采用的分发方式，例如 `sendline` 或 `exchange`

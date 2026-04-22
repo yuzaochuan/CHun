@@ -20,6 +20,7 @@ from chun.core.models import (
     FmtOffsetProbeResult,
     FmtReadMode,
     FmtWriteComparison,
+    FmtWritesComparison,
     FmtWriteRequest,
     FmtValueRef,
     FmtTargetRef,
@@ -688,6 +689,40 @@ def test_fmt_service_compare_write_uses_buflen_status_icons() -> None:
     assert "❌" in str(bad_result)
 
 
+def test_fmt_service_compare_write_marks_extreme_pad_time_as_bad_without_buflen() -> None:
+    session = build_session()
+    session.rec.set_context("arch.bits", 64, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+
+    result = session.fmt.compare_write(
+        0x601030,
+        0x4005C0,
+        offset=6,
+        strategies=[FmtWriteStrategy.INT],
+    )
+
+    text = str(result)
+    assert "◆ INT   ❌" in text
+    assert "pad_time EXTREME" in text
+
+
+def test_fmt_service_compare_write_keeps_high_pad_time_non_fatal_without_buflen() -> None:
+    session = build_session()
+    session.rec.set_context("arch.bits", 64, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+
+    result = session.fmt.compare_write(
+        0x6010A0,
+        0x601018,
+        offset=6,
+        strategies=[FmtWriteStrategy.AUTO],
+    )
+
+    text = str(result)
+    assert "◆ AUTO   ❔" in text
+    assert "pad_time HIGH" in text or "pad_time MEDIUM" in text
+
+
 def test_fmt_service_compare_write_show_hex_renders_send_hexdump() -> None:
     session = build_session()
     session.rec.set_context("arch.bits", 64, domain=RecordDomain.FMT)
@@ -707,6 +742,49 @@ def test_fmt_service_compare_write_show_hex_renders_send_hexdump() -> None:
     assert "[CHun.fmt] Sent 0x29 bytes:" in text
     assert "00000000" in text
     assert "00000020" in text
+
+
+def test_fmt_service_compare_writes_returns_multi_write_comparison() -> None:
+    session = build_session()
+    session.rec.set_context("arch.bits", 64, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+
+    result = session.fmt.compare_writes(
+        {0x404018: 0x11223344, 0x404020: 0x55667788},
+        offset=6,
+    )
+
+    assert isinstance(result, FmtWritesComparison)
+    assert len(result.requests) == 2
+    assert [item.strategy for item in result.candidates] == [
+        FmtWriteStrategy.AUTO,
+        FmtWriteStrategy.BYTE,
+        FmtWriteStrategy.SHORT,
+        FmtWriteStrategy.INT,
+    ]
+    text = str(result)
+    assert "[FMT.writes] requests=2" in text
+    assert "writes=[0x404018<-0x11223344, 0x404020<-0x55667788]" in text
+    assert "fmt b'" in text
+    assert "payload b'" in text
+
+
+def test_fmt_service_compare_writes_show_hex_renders_send_hexdump() -> None:
+    session = build_session()
+    session.rec.set_context("arch.bits", 64, domain=RecordDomain.FMT)
+    session.rec.set_context("arch.endian", "little", domain=RecordDomain.FMT)
+
+    result = session.fmt.compare_writes(
+        {0x404018: 0x11223344, 0x404020: 0x55667788},
+        offset=6,
+        end=b"\n",
+        show_hex=True,
+        strategies=[FmtWriteStrategy.AUTO],
+    )
+
+    text = str(result)
+    assert "send.hex" in text
+    assert "[CHun.fmt] Sent 0x" in text
 
 
 def test_fmt_service_compare_write_captures_strategy_failures() -> None:
@@ -911,7 +989,12 @@ def test_default_renderer_uses_pwntools_fmt_and_data_split() -> None:
 
     rendered = session.fmt.render_task(plan.tasks[0], plan=plan, offset=6)
     with pwntools_context.local(bits=64, endian="little"):
-        expected_payload = fmtstr_payload(6, {0x60120: b"\x66"}, write_size="byte")
+        expected_payload = fmtstr_payload(
+            6,
+            {0x60120: b"\x66"},
+            write_size="byte",
+            write_size_max="byte",
+        )
 
     assert rendered.backend == "pwntools"
     assert rendered.fmt_bytes
@@ -922,6 +1005,45 @@ def test_default_renderer_uses_pwntools_fmt_and_data_split() -> None:
     assert rendered.data_offset == 8
     assert rendered.steps[0].arg_index == 8
     assert b"%6$" not in rendered.fmt_bytes
+
+
+def test_byte_strategy_is_strict_byte_only_for_got_style_pointer_writes() -> None:
+    session = build_session()
+    plan = session.fmt.plan_writes(
+        {0x601030: 0x4005C0},
+        strategy=FmtWriteStrategy.BYTE,
+        task_policy=FmtTaskPolicy.PACKED,
+        offset=6,
+        store=False,
+    )
+
+    rendered = session.fmt.render_task(plan.tasks[0], plan=plan, offset=6)
+
+    assert plan.metadata["write_size"] == "byte"
+    assert plan.metadata["write_size_max"] == "byte"
+    assert all(atom.width == 1 for atom in plan.atoms)
+    assert b"$hn" not in rendered.fmt_bytes
+    assert b"$n" not in rendered.fmt_bytes
+    assert rendered.fmt_bytes.count(b"$") == len(plan.atoms)
+    assert all(step.specifier == "hhn" for step in rendered.steps)
+
+
+def test_auto_strategy_includes_high_zero_bytes_in_plan() -> None:
+    session = build_session()
+    plan = session.fmt.plan_writes(
+        {0x601030: 0x4005C0},
+        strategy=FmtWriteStrategy.AUTO,
+        task_policy=FmtTaskPolicy.PACKED,
+        offset=6,
+        store=False,
+    )
+
+    assert plan.metadata["writes"] == {0x601030: b"\xc0\x05\x40\x00\x00\x00\x00\x00"}
+    assert len(plan.atoms) == 2
+    assert [(atom.address, atom.value, atom.width) for atom in plan.atoms] == [
+        (0x601030, 0x5C0, 8),
+        (0x601032, 0x40, 1),
+    ]
 
 
 def test_pwntools_backend_render_matches_fmtstr_payload_ground_truth() -> None:
@@ -943,6 +1065,7 @@ def test_pwntools_backend_render_matches_fmtstr_payload_ground_truth() -> None:
                 0x404020: b"\x88\x77\x66\x55",
             },
             write_size="short",
+            write_size_max="short",
         )
 
     assert rendered.backend == "pwntools"
@@ -985,7 +1108,12 @@ def test_pwntools_backend_computes_task_local_data_offset_on_32bit() -> None:
     rendered = session.fmt.render_task(plan.tasks[0], plan=plan, offset=7)
 
     with pwntools_context.local(bits=32, endian="little"):
-        expected_payload = fmtstr_payload(7, {0x804A020: b"\x66"}, write_size="byte")
+        expected_payload = fmtstr_payload(
+            7,
+            {0x804A020: b"\x66"},
+            write_size="byte",
+            write_size_max="byte",
+        )
 
     assert rendered.payload == expected_payload
     assert rendered.data_offset == 10

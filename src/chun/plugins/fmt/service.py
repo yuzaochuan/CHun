@@ -21,6 +21,7 @@ from ...core.models import (
     FmtValueRef,
     FmtWriteCandidate,
     FmtWriteComparison,
+    FmtWritesComparison,
     FmtWriteAtom,
     FmtWritePlan,
     FmtWriteRequest,
@@ -326,7 +327,7 @@ class FmtService:
         )
 
     @staticmethod
-    def _log_compare_write_result(result: FmtWriteComparison) -> None:
+    def _log_compare_write_result(result: object) -> None:
         log.info(str(result))
 
     # ------------------------------------------------------------------
@@ -555,6 +556,108 @@ class FmtService:
             self._log_compare_write_result(result)
         return result
 
+    def compare_writes(
+        self,
+        writes: Mapping[AddressLike, ValueLike] | Sequence[FmtWriteRequest],
+        *,
+        strategies: Sequence[FmtWriteStrategy | str] = (
+            FmtWriteStrategy.AUTO,
+            FmtWriteStrategy.BYTE,
+            FmtWriteStrategy.SHORT,
+            FmtWriteStrategy.INT,
+        ),
+        offset: int | None = None,
+        task_policy: FmtTaskPolicy = FmtTaskPolicy.PACKED,
+        data_offset: int | None = None,
+        buflen: int | None = None,
+        end: bytes | None = None,
+        show_hex: bool = False,
+        layout: FmtLayoutPolicy = FmtLayoutPolicy.ADDRESSES_LAST,
+        initial_counter: int = 0,
+        loginfo: bool = False,
+        **kwargs: object,
+    ) -> FmtWritesComparison:
+        current_offset_model = self.get_offset(required=False)
+        resolved_offset = (
+            offset
+            if offset is not None
+            else (current_offset_model.index if current_offset_model else None)
+        )
+        requests = tuple(
+            self._normalize_requests(
+                writes,
+                strategy=FmtWriteStrategy.AUTO,
+                chunk_width=None,
+                value_bits=None,
+            )
+        )
+        normalized_strategies = tuple(
+            self._normalize_write_strategy(item) for item in strategies
+        )
+
+        candidates: list[FmtWriteCandidate] = []
+        for strategy in normalized_strategies:
+            strategy_requests = tuple(
+                replace(request, strategy=strategy) for request in requests
+            )
+            try:
+                plan = self.plan_writes(
+                    strategy_requests,
+                    strategy=strategy,
+                    offset=resolved_offset,
+                    task_policy=task_policy,
+                    data_offset=data_offset,
+                    store=False,
+                    **kwargs,
+                )
+                rendered_tasks = self.render_plan(
+                    plan,
+                    offset=resolved_offset,
+                    data_offset=data_offset,
+                    layout=layout,
+                    initial_counter=initial_counter,
+                    store=False,
+                )
+                candidates.append(
+                    FmtWriteCandidate(
+                        strategy=strategy,
+                        plan=plan,
+                        rendered_tasks=rendered_tasks,
+                        metadata={
+                            "layout": layout.value,
+                            "offset": plan.offset,
+                        },
+                    )
+                )
+            except Exception as exc:
+                candidates.append(
+                    FmtWriteCandidate(
+                        strategy=strategy,
+                        error=f"{type(exc).__name__}: {exc}",
+                        metadata={"layout": layout.value},
+                    )
+                )
+
+        result = FmtWritesComparison(
+            requests=requests,
+            candidates=tuple(candidates),
+            metadata={
+                "requested_strategies": tuple(
+                    strategy.value for strategy in normalized_strategies
+                ),
+                "offset": resolved_offset,
+                "task_policy": task_policy.value,
+                "data_offset": data_offset,
+                "buflen": buflen,
+                "end": end,
+                "show_hex": show_hex,
+                "layout": layout.value,
+            },
+        )
+        if loginfo:
+            self._log_compare_write_result(result)
+        return result
+
     def plan_writes(
         self,
         writes: Mapping[AddressLike, ValueLike] | Sequence[FmtWriteRequest],
@@ -567,7 +670,7 @@ class FmtService:
         data_offset: int | None = None,
         backend: str = "pwntools",
         write_size: str | None = None,
-        write_size_max: str = "long",
+        write_size_max: str | None = None,
         overflows: int = 16,
         backend_strategy: str = "small",
         badbytes: bytes | bytearray | Sequence[int] = (),
@@ -608,6 +711,15 @@ class FmtService:
             value_bits=value_bits,
         )
         try:
+            resolved_write_size = write_size or self._infer_write_size(
+                strategy=strategy,
+                chunk_width=chunk_width,
+            )
+            resolved_write_size_max = self._infer_write_size_max(
+                strategy=strategy,
+                chunk_width=chunk_width,
+                write_size_max=write_size_max,
+            )
             base_plan = self._planner.plan(
                 requests,
                 bits=arch.bits,
@@ -615,9 +727,8 @@ class FmtService:
                 pointer_size=arch.pointer_size,
                 task_policy=task_policy,
                 backend=backend,
-                write_size=write_size
-                or self._infer_write_size(strategy=strategy, chunk_width=chunk_width),
-                write_size_max=write_size_max,
+                write_size=resolved_write_size,
+                write_size_max=resolved_write_size_max,
                 overflows=overflows,
                 backend_strategy=backend_strategy,
                 badbytes=badbytes,
@@ -683,7 +794,7 @@ class FmtService:
         data_offset: int | None = None,
         backend: str = "pwntools",
         write_size: str | None = None,
-        write_size_max: str = "long",
+        write_size_max: str | None = None,
         overflows: int = 16,
         backend_strategy: str = "small",
         badbytes: bytes | bytearray | Sequence[int] = (),
@@ -1038,6 +1149,27 @@ class FmtService:
             FmtWriteStrategy.PTR: "long",
         }
         return mapping.get(strategy, "short")
+
+    @staticmethod
+    def _infer_write_size_max(
+        *,
+        strategy: FmtWriteStrategy,
+        chunk_width: int | None,
+        write_size_max: str | None,
+    ) -> str:
+        if write_size_max is not None:
+            return write_size_max
+        if chunk_width in (1, 2, 4, 8):
+            return {1: "byte", 2: "short", 4: "int", 8: "long"}[chunk_width]
+        if strategy == FmtWriteStrategy.BYTE:
+            return "byte"
+        if strategy == FmtWriteStrategy.SHORT:
+            return "short"
+        if strategy == FmtWriteStrategy.INT:
+            return "int"
+        if strategy == FmtWriteStrategy.PTR:
+            return "long"
+        return "long"
 
     @staticmethod
     def _normalize_write_strategy(

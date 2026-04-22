@@ -141,7 +141,8 @@ t.gdb("b *main\nc")
 - `t.recv_leak(...)` 的返回值就是解析后的整数泄漏；脚本态优先直接使用返回值，而不是再手动 `get_observation(...).value`
 - `t.recv_leak(name)` 支持没有明显前缀的场景：若不传 `delim` / `regex`，会直接按当前 `mode` 从流中读取泄漏值
 - `t.recv_leak(..., mode="raw")` 默认按常见 CTF 泄漏习惯读取 32 位 `4` 字节、64 位 `6` 字节，再按 `t.elf.bytes` 补零解析
-- `t.recv_leak(..., mode="hex")` 支持 `0x...` 十六进制字符串解析
+- `t.recv_leak(..., mode="hex")` 会从读到的文本里提取全部 `0x...` 地址 token；默认取第一个，可用 `index=` 指定第几个命中
+- `t.recv_leak(..., mode="hex", delim=..., delim_end=...)` 可限定提取窗口到两个分隔符之间；若命中多个地址会 `warning` 输出完整列表和默认选中的地址
 - `t.libc_base` / `t.libc_version` 以及 `t.session.libc_base` / `t.session.libc_version` 提供快捷读取；若尚未确认则抛 `RuntimeError`
 - `t.resolve.symbol("str_bin_sh")` / `t.resolve.symbol("puts@got")` 会自动做后缀剥离和 alias 归一化；已绑定 `t.libc` 时优先走本地 `libc_elf + libc.base`，否则回退到 `libc.version + catalog`
 - 访问 `t.session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`

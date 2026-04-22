@@ -6,6 +6,7 @@ from ...core.models import (
     FmtExecutionResult,
     FmtTaskPolicy,
     FmtWriteComparison,
+    FmtWritesComparison,
     FmtWritePlan,
 )
 
@@ -41,6 +42,14 @@ class BlindFmtService:
     ) -> FmtWriteComparison:
         kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
         return self.base.compare_write(target, value, **kwargs)
+
+    def compare_writes(
+        self,
+        writes: object,
+        **kwargs: object,
+    ) -> FmtWritesComparison:
+        kwargs.setdefault("task_policy", FmtTaskPolicy.BY_ATOM)
+        return self.base.compare_writes(writes, **kwargs)
 
     def split_plan(
         self,

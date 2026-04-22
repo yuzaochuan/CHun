@@ -75,7 +75,9 @@ class PwntoolsFmtBackend:
                 normalized_badbytes,
             )
 
-        chun_atoms = tuple(self._to_chun_atom(atom, requests=requests) for atom in atoms)
+        chun_atoms = tuple(
+            self._to_chun_atom(atom, requests=requests, bits=bits) for atom in atoms
+        )
         tasks = tuple(self._group_atoms(chun_atoms, policy=task_policy))
         return FmtWritePlan(
             bits=bits,
@@ -247,6 +249,13 @@ class PwntoolsFmtBackend:
     @staticmethod
     def _resolve_request_byte_len(request: FmtWriteRequest, *, bits: int) -> int:
         pointer_size = bits // 8
+        if (
+            request.value_bits is None
+            and request.chunk_width is None
+            and request.strategy in (FmtWriteStrategy.AUTO, FmtWriteStrategy.PTR)
+        ):
+            return pointer_size
+
         if request.chunk_width is not None:
             unit_width = request.chunk_width
         elif request.strategy == FmtWriteStrategy.BYTE:
@@ -273,6 +282,7 @@ class PwntoolsFmtBackend:
         atom: object,
         *,
         requests: Sequence[FmtWriteRequest],
+        bits: int,
     ) -> FmtWriteAtom:
         start = int(getattr(atom, "start"))
         size = int(getattr(atom, "size"))
@@ -283,6 +293,7 @@ class PwntoolsFmtBackend:
             start,
             requests,
             atom_size=size,
+            bits=bits,
         )
         return FmtWriteAtom(
             request_index=request_index,
@@ -309,10 +320,11 @@ class PwntoolsFmtBackend:
         requests: Sequence[FmtWriteRequest],
         *,
         atom_size: int,
+        bits: int,
     ) -> tuple[int, int, str | None]:
         for request_index, request in enumerate(requests):
             start = request.target.address
-            width = max(1, (request.value_bits + 7) // 8) if request.value_bits else 8
+            width = PwntoolsFmtBackend._resolve_request_byte_len(request, bits=bits)
             if start <= address < start + width:
                 piece_index = max(0, (address - start) // atom_size)
                 return request_index, piece_index, request.target.symbol
