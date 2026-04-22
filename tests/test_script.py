@@ -1229,6 +1229,163 @@ def test_script_recv_leak_reads_hex_and_applies_offset(
     ]
 
 
+def test_script_recv_leak_extracts_first_hex_token_from_dirty_line(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvline_values = [b"0x7f1234580aa0 saved-rbp=0x7ffe3748e060\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    warnings: list[str] = []
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("puts", delim="puts: ", mode="hex")
+
+    assert value == 0x7F1234580AA0
+    assert warnings == [
+        "共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060|默认选 0x7f1234580aa0"
+    ]
+    assert session.io.calls == [
+        ("recvuntil", ("puts: ",), {"drop": False}),
+        ("recvline", (), {"keepends": False}),
+    ]
+
+
+def test_script_recv_leak_supports_hex_index_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvline_values = [b"0x7f1234580aa0 0x7ffe3748e060\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    warnings: list[str] = []
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("saved_rbp", delim="puts: ", mode="hex", index=1)
+
+    assert value == 0x7FFE3748E060
+    assert warnings == [
+        "共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060|默认选 0x7ffe3748e060"
+    ]
+
+
+def test_script_recv_leak_supports_hex_delim_end_window(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+
+    def fake_recvuntil(delim: bytes, drop: bool = False) -> bytes:
+        session.io.calls.append(("recvuntil", (delim,), {"drop": drop}))
+        if delim == b"Hello,":
+            return b"Hello,"
+        if delim == b" world":
+            return b"0x7f1234580aa0 and 0x7ffe3748e060 world"
+        return b"until"
+
+    session.io.recvuntil = fake_recvuntil
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    warnings: list[str] = []
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak(
+        "saved_rbp",
+        b"Hello,",
+        mode="hex",
+        delim_end=b" world",
+        index=1,
+    )
+
+    assert value == 0x7FFE3748E060
+    assert warnings == [
+        "共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060|默认选 0x7ffe3748e060"
+    ]
+    assert session.io.calls == [
+        ("recvuntil", (b"Hello,",), {"drop": False}),
+        ("recvuntil", (b" world",), {"drop": True}),
+    ]
+
+
+def test_script_recv_leak_rejects_out_of_range_hex_index(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvline_values = [b"0x7f1234580aa0 0x7ffe3748e060\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(
+        ValueError,
+        match=r"共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060，index=2 越界。",
+    ):
+        entry.recv_leak("puts", mode="hex", index=2)
+
+
+def test_script_recv_leak_rejects_delim_end_with_regex(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(ValueError, match="delim_end 和 regex 不能同时提供。"):
+        entry.recv_leak("puts", delim_end=b"!", regex=rb"(0x[0-9a-f]+)", mode="hex")
+
+
 def test_script_recv_leak_reads_regex_capture_and_allows_custom_domain(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],

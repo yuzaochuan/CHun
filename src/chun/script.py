@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import termios
 import tty
+import re
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
     from .core.session import CHunSession
 
 DEFAULT_SCRIPT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h")
+_HEX_POINTER_RE = re.compile(rb"0x[0-9a-fA-F]+")
 
 
 class ScriptEntry:
@@ -360,19 +362,25 @@ class ScriptEntry:
         name: str,
         delim: bytes | str | None = None,
         *,
+        delim_end: bytes | str | None = None,
         regex: bytes | str | None = None,
         domain: RecordDomain | None = None,
         offset: int = 0,
         source: str = "leak",
         mode: Literal["raw", "hex"] = "raw",
+        index: int = 0,
         size: int | None = None,
         strip_newline: bool = True,
     ) -> int:
         """接收一个泄漏值，完成解析、修正并自动写入 registry。"""
         if delim is not None and regex is not None:
             raise ValueError("delim 和 regex 不能同时提供。")
+        if delim_end is not None and regex is not None:
+            raise ValueError("delim_end 和 regex 不能同时提供。")
         if mode not in {"raw", "hex"}:
             raise ValueError("mode 必须是 'raw' 或 'hex'。")
+        if mode == "raw" and delim_end is not None:
+            raise ValueError("mode='raw' 时不支持 delim_end。")
 
         resolved_domain = domain or RecordDomain.LIBC
         payload: bytes
@@ -391,9 +399,15 @@ class ScriptEntry:
                 if strip_newline:
                     payload = payload.rstrip(b"\r\n")
             else:
-                payload = self.recvline(keepends=not strip_newline)
-                if strip_newline:
-                    payload = payload.strip()
+                if delim_end is not None:
+                    resolved_delim_end = self._coerce_delim_or_regex(
+                        delim_end, field_name="delim_end"
+                    )
+                    payload = self.recvuntil(resolved_delim_end, drop=True)
+                else:
+                    payload = self.recvline(keepends=not strip_newline)
+                    if strip_newline:
+                        payload = payload.strip()
 
         if mode == "raw":
             pointer_width = int(getattr(self.elf, "bytes", 8))
@@ -402,13 +416,23 @@ class ScriptEntry:
                 leak_bytes.ljust(pointer_width, b"\x00"), "little"
             )
         else:
-            text = payload.decode().strip()
-            if not text:
+            matches = _HEX_POINTER_RE.findall(payload)
+            if not matches:
+                text = payload.decode(errors="replace").strip()
                 raise ValueError("未读取到可解析的十六进制泄漏。")
             try:
-                leak_val = int(text, 16)
-            except ValueError as exc:
-                raise ValueError(f"无法解析十六进制泄漏：{text}") from exc
+                selected = matches[index]
+            except IndexError as exc:
+                tokens = ",".join(token.decode() for token in matches)
+                raise ValueError(
+                    f"共匹配到 {len(matches)} 个地址：{tokens}，index={index} 越界。"
+                ) from exc
+            if len(matches) > 1:
+                tokens = ",".join(token.decode() for token in matches)
+                log.warning(
+                    f"共匹配到 {len(matches)} 个地址：{tokens}|默认选 {selected.decode()}"
+                )
+            leak_val = int(selected, 16)
 
         actual_val = leak_val - offset
         self.rec.record_symbol_leak(
