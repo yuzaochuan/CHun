@@ -4,6 +4,7 @@ from pathlib import Path
 
 from chun.cli import main
 from chun.core.models import TargetSpec, TransportSpec
+from chun.core.registry import EvidenceRegistry
 from chun.core.session import CHunSession
 
 
@@ -99,3 +100,44 @@ def test_workflow_cli_run_executes_exported_transcript(monkeypatch, tmp_path: Pa
     assert session.transport.sent == [("sendline", b"1")]
     assert session.rec.get_artifact("workflow.exec.result") is not None
     assert session.rec.get_context("workflow.current_checkpoint").value == "exp.__block__.0"
+
+
+def test_workflow_cli_run_prints_registry_summary(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "exp.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from chun import CHun",
+                's = CHun.script("./fm").start()',
+                's.recvuntil(b"> ")',
+                's.sendline(b"1")',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["workflow", "export", str(source)]) == 0
+
+    session = _make_session()
+    show_calls: list[dict[str, object]] = []
+
+    def fake_process(_binary: str, **_kwargs) -> CHunSession:
+        return session
+
+    def fake_show(self: EvidenceRegistry, **kwargs: object) -> list[str]:
+        show_calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr("chun.core.workflow.launchers.CHun.process", fake_process)
+    monkeypatch.setattr(EvidenceRegistry, "show", fake_show)
+
+    code = main(["workflow", "run", str(tmp_path / "exp.workflow.json")])
+
+    assert code == 0
+    assert show_calls == [
+        {
+            "layers": ("context", "facts"),
+            "detail": "standard",
+            "emit": "info",
+        }
+    ]

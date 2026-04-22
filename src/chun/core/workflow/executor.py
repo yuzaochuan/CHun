@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from ..models import (
     ArtifactKind,
     ContextKind,
@@ -29,6 +31,7 @@ class WorkflowExecutor:
         launcher: WorkflowLauncher | None = None,
         artifact_prefix: str = "workflow.exec",
         record: bool = True,
+        on_complete: Callable[[object, WorkflowExecutionResult], None] | None = None,
     ) -> WorkflowExecutionResult:
         session = None
         env: dict[str, object] = {}
@@ -113,6 +116,8 @@ class WorkflowExecutor:
                         source="workflow.execute",
                         overwrite=True,
                     )
+                if on_complete is not None:
+                    on_complete(session, result)
             return result
         finally:
             if session is not None:

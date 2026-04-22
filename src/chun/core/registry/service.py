@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Iterable, TypeVar
+from enum import Enum
+from typing import Any, Callable, Iterable, Literal, TypeVar, cast
+
+from ..._compat import log
 
 from ..errors import RegistryConflictError
 from ..models import (
@@ -19,6 +22,28 @@ from ..models import (
 )
 
 T = TypeVar("T", Observation, Fact, Artifact, ContextEntry)
+RegistryRecord = Observation | Fact | Artifact | ContextEntry
+RegistryLayer = Literal["context", "observations", "facts", "artifacts"]
+RegistryDetail = Literal["compact", "standard", "verbose"]
+RegistryEmit = Literal["debug", "info", "warning"]
+RegistryArtifactMode = Literal["summary", "repr", "skip"]
+
+_LAYER_ORDER: tuple[RegistryLayer, ...] = ("context", "observations", "facts", "artifacts")
+_LAYER_LABELS: dict[RegistryLayer, str] = {
+    "context": "Context",
+    "observations": "Observations",
+    "facts": "Facts",
+    "artifacts": "Artifacts",
+}
+_LAYER_ABBR: dict[RegistryLayer, str] = {
+    "context": "ctx",
+    "observations": "obs",
+    "facts": "facts",
+    "artifacts": "arts",
+}
+_DETAIL_VALUES = {"compact", "standard", "verbose"}
+_EMIT_VALUES = {"debug", "info", "warning"}
+_ARTIFACT_MODE_VALUES = {"summary", "repr", "skip"}
 
 
 class EvidenceRegistry:
@@ -311,6 +336,301 @@ class EvidenceRegistry:
             tag=tag,
             source=source,
         )
+
+    @staticmethod
+    def _normalize_layers(layers: Iterable[RegistryLayer] | RegistryLayer) -> tuple[RegistryLayer, ...]:
+        if isinstance(layers, str):
+            values = (cast(RegistryLayer, layers),)
+        else:
+            values = tuple(layers)
+        if not values:
+            raise ValueError("layers 不能为空")
+        invalid = [value for value in values if value not in _LAYER_ORDER]
+        if invalid:
+            allowed = ", ".join(_LAYER_ORDER)
+            raise ValueError(f"未知 layers：{', '.join(invalid)}，可选值：{allowed}")
+        deduped: list[RegistryLayer] = []
+        for value in values:
+            if value not in deduped:
+                deduped.append(value)
+        return tuple(deduped)
+
+    @staticmethod
+    def _normalize_detail(detail: RegistryDetail) -> RegistryDetail:
+        if detail not in _DETAIL_VALUES:
+            allowed = ", ".join(sorted(_DETAIL_VALUES))
+            raise ValueError(f"未知 detail：{detail}，可选值：{allowed}")
+        return detail
+
+    @staticmethod
+    def _normalize_emit(emit: RegistryEmit) -> RegistryEmit:
+        if emit not in _EMIT_VALUES:
+            allowed = ", ".join(sorted(_EMIT_VALUES))
+            raise ValueError(f"未知 emit：{emit}，可选值：{allowed}")
+        return emit
+
+    @staticmethod
+    def _normalize_artifact_mode(artifact_mode: RegistryArtifactMode) -> RegistryArtifactMode:
+        if artifact_mode not in _ARTIFACT_MODE_VALUES:
+            allowed = ", ".join(sorted(_ARTIFACT_MODE_VALUES))
+            raise ValueError(f"未知 artifact_mode：{artifact_mode}，可选值：{allowed}")
+        return artifact_mode
+
+    def _bucket_for_layer(self, layer: RegistryLayer) -> Iterable[RegistryRecord]:
+        if layer == "context":
+            return self.context.values()
+        if layer == "observations":
+            return self.observations.values()
+        if layer == "facts":
+            return self.facts.values()
+        return self.artifacts.values()
+
+    @staticmethod
+    def _format_scalar(value: object) -> str:
+        if isinstance(value, bool):
+            return str(value)
+        if isinstance(value, int):
+            return f"{value:#014x}" if value > 0xFFFFFFFF else f"{value:#010x}"
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return repr(bytes(value))
+        return repr(value)
+
+    @staticmethod
+    def _truncate(text: str, *, limit: int = 96) -> str:
+        if len(text) <= limit:
+            return text
+        if limit <= 3:
+            return text[:limit]
+        return text[: limit - 3] + "..."
+
+    @staticmethod
+    def _safe_len(value: object) -> int | None:
+        try:
+            return len(value)  # type: ignore[arg-type]
+        except Exception:
+            return None
+
+    def _summarize_artifact(self, value: object) -> str:
+        if isinstance(value, (bool, int)):
+            return self._format_scalar(value)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raw = bytes(value)
+            preview = self._truncate(repr(raw), limit=48)
+            return f"bytes[len={len(raw)}] {preview}"
+        if isinstance(value, str):
+            preview = self._truncate(repr(value), limit=48)
+            return f"str[len={len(value)}] {preview}"
+        if isinstance(value, dict):
+            return f"dict[len={len(value)}]"
+        if isinstance(value, list):
+            return f"list[len={len(value)}]"
+        if isinstance(value, tuple):
+            return f"tuple[len={len(value)}]"
+        if isinstance(value, set):
+            return f"set[len={len(value)}]"
+        size = self._safe_len(value)
+        if size is not None:
+            return f"{type(value).__name__}[len={size}]"
+        return type(value).__name__
+
+    def _format_value(
+        self,
+        record: RegistryRecord,
+        *,
+        artifact_mode: RegistryArtifactMode,
+    ) -> str | None:
+        if isinstance(record, Artifact):
+            if artifact_mode == "skip":
+                return None
+            if artifact_mode == "summary":
+                return self._summarize_artifact(record.value)
+        return self._truncate(self._format_scalar(record.value))
+
+    @staticmethod
+    def _enum_value(value: object) -> str:
+        if isinstance(value, Enum):
+            return str(value.value)
+        return str(value)
+
+    def snapshot(
+        self,
+        *,
+        layers: Iterable[RegistryLayer] | RegistryLayer = _LAYER_ORDER,
+        domain: RecordDomain | None = None,
+        source: str | None = None,
+        tag: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, object]:
+        """返回按层分组的 registry 快照。
+
+        `limit` 按层生效，用于裁剪每一层输出的记录数量。
+        """
+        selected_layers = self._normalize_layers(layers)
+        if limit is not None and limit < 0:
+            raise ValueError("limit 不能小于 0")
+
+        layer_map: dict[RegistryLayer, list[RegistryRecord]] = {}
+        summary: dict[str, int] = {}
+        total = 0
+
+        for layer in selected_layers:
+            records = self._find(
+                self._bucket_for_layer(layer),
+                domain=domain,
+                tag=tag,
+                source=source,
+            )
+            typed_records = cast(list[RegistryRecord], records)
+            if limit is not None:
+                typed_records = typed_records[:limit]
+            layer_map[layer] = typed_records
+            count = len(typed_records)
+            summary[layer] = count
+            total += count
+
+        summary["total"] = total
+        return {"layers": layer_map, "summary": summary}
+
+    def _render_record(
+        self,
+        record: RegistryRecord,
+        *,
+        detail: RegistryDetail,
+        artifact_mode: RegistryArtifactMode,
+    ) -> list[str]:
+        value_text = self._format_value(record, artifact_mode=artifact_mode)
+        if value_text is None:
+            return []
+
+        if detail == "compact":
+            return [f"{record.name:<32} {value_text}"]
+
+        if detail == "standard":
+            extras = [
+                f"kind={self._enum_value(record.kind)}",
+                f"domain={self._enum_value(record.domain)}",
+                f"src={record.source}",
+            ]
+            if isinstance(record, Observation | Fact):
+                extras.append(f"conf={record.confidence:.2f}")
+            return [f"{record.name:<32} {value_text} {' '.join(extras)}"]
+
+        lines = [
+            f"name        {record.name}",
+            f"value       {value_text}",
+            f"kind        {self._enum_value(record.kind)}",
+            f"domain      {self._enum_value(record.domain)}",
+            f"source      {record.source}",
+        ]
+        if isinstance(record, Observation | Fact):
+            lines.append(f"confidence  {record.confidence:.2f}")
+        if isinstance(record, Fact) and record.evidence:
+            lines.append(f"evidence    {', '.join(record.evidence)}")
+        if record.tags:
+            lines.append(f"tags        {', '.join(record.tags)}")
+        if record.metadata:
+            lines.append(f"metadata    {self._truncate(repr(record.metadata), limit=120)}")
+        lines.append(f"ts          {record.ts.isoformat()}")
+        return lines
+
+    def render(
+        self,
+        *,
+        layers: Iterable[RegistryLayer] | RegistryLayer = _LAYER_ORDER,
+        detail: RegistryDetail = "standard",
+        domain: RecordDomain | None = None,
+        source: str | None = None,
+        tag: str | None = None,
+        limit: int | None = None,
+        artifact_mode: RegistryArtifactMode = "summary",
+    ) -> list[str]:
+        """把 registry 快照渲染为文本行。"""
+        normalized_layers = self._normalize_layers(layers)
+        normalized_detail = self._normalize_detail(detail)
+        normalized_artifact_mode = self._normalize_artifact_mode(artifact_mode)
+        data = self.snapshot(
+            layers=normalized_layers,
+            domain=domain,
+            source=source,
+            tag=tag,
+            limit=limit,
+        )
+        layer_map = cast(dict[RegistryLayer, list[RegistryRecord]], data["layers"])
+        rendered_layers: dict[RegistryLayer, list[str]] = {}
+        rendered_counts: dict[RegistryLayer, int] = {}
+        rendered_total = 0
+        for layer in normalized_layers:
+            layer_lines: list[str] = []
+            visible_count = 0
+            for record in layer_map[layer]:
+                record_lines = self._render_record(
+                    record,
+                    detail=normalized_detail,
+                    artifact_mode=normalized_artifact_mode,
+                )
+                if not record_lines:
+                    continue
+                if normalized_detail == "verbose" and layer_lines:
+                    layer_lines.append("-" * 56)
+                layer_lines.extend(record_lines)
+                visible_count += 1
+            rendered_layers[layer] = layer_lines
+            rendered_counts[layer] = visible_count
+            rendered_total += visible_count
+
+        summary_text = " ".join(
+            f"{_LAYER_ABBR[layer]}={rendered_counts[layer]}" for layer in normalized_layers
+        )
+        lines = [f"[Registry] {summary_text} total={rendered_total}"]
+        if rendered_total == 0:
+            lines.append("当前 Registry 还没有匹配记录。")
+            return lines
+
+        for layer in normalized_layers:
+            layer_lines = rendered_layers[layer]
+            if not layer_lines:
+                continue
+            lines.append(f"[{_LAYER_LABELS[layer]}]")
+            lines.extend(layer_lines)
+        return lines
+
+    @staticmethod
+    def _resolve_emitter(level: RegistryEmit) -> Callable[[str], None]:
+        if level == "debug":
+            return log.debug
+        if level == "warning":
+            return log.warning
+        return log.info
+
+    def show(
+        self,
+        *,
+        layers: Iterable[RegistryLayer] | RegistryLayer = _LAYER_ORDER,
+        detail: RegistryDetail = "standard",
+        emit: RegistryEmit = "info",
+        domain: RecordDomain | None = None,
+        source: str | None = None,
+        tag: str | None = None,
+        limit: int | None = None,
+        artifact_mode: RegistryArtifactMode = "summary",
+    ) -> list[str]:
+        """输出 registry 快照，并返回已输出的文本行。"""
+        normalized_emit = self._normalize_emit(emit)
+        lines = self.render(
+            layers=layers,
+            detail=detail,
+            domain=domain,
+            source=source,
+            tag=tag,
+            limit=limit,
+            artifact_mode=artifact_mode,
+        )
+        emitter = self._resolve_emitter(normalized_emit)
+        for line in lines:
+            emitter(line)
+        return lines
 
     def to_dict(self) -> dict[str, object]:
         return {

@@ -93,13 +93,21 @@ def cmd_workflow_show(exp_path: str, *, entry: str | None = None) -> int:
 def cmd_workflow_run(workflow_path: str) -> int:
     transcript = WorkflowJsonCodec.load_transcript(workflow_path)
     executor = WorkflowExecutor()
-    result = executor.execute(transcript)
+    captured_session: dict[str, object] = {}
+
+    def _capture_session(session: object, _result: object) -> None:
+        captured_session["session"] = session
+
+    result = executor.execute(transcript, on_complete=_capture_session)
     print(f"entry_action: {result.transcript.entry_action}")
     print(f"total_steps: {result.total_steps}")
     if result.final_checkpoint is not None:
         print(f"final_checkpoint: {result.final_checkpoint.name}")
     else:
         print("final_checkpoint: <none>")
+    session = captured_session.get("session")
+    if session is not None:
+        session.rec.show(layers=("context", "facts"), detail="standard", emit="info")
     return 0
 
 

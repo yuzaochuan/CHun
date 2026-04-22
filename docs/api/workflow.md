@@ -45,6 +45,18 @@ chun workflow show ./exp.py
 chun workflow run ./exp.workflow.json
 ```
 
+`workflow run` 在执行完成后，除了打印 `entry_action / total_steps / final_checkpoint`，还会默认追加一段 registry 摘要：
+
+- 默认层级：`context + facts`
+- 默认详细度：`standard`
+- 默认日志级别：`info`
+
+这里故意不默认展开 `observations` / `artifacts`，因为 workflow 执行期间会产生大量 `workflow.exec.response.*` 和 step receipt，直接全量打印通常噪音过高。当前 CLI 的目标是先让你快速确认：
+
+- 当前 checkpoint 在哪
+- 推导出的关键事实是否已经落到 registry
+- 这次 replay 是否真的完成了关键分析链
+
 默认导出规则：
 
 - 输入 `./exp.py`

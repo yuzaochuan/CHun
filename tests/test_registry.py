@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import chun.core.registry.service as registry_service
 from chun.core.errors import RegistryConflictError
 from chun.core.models import (
     ArtifactKind,
@@ -132,3 +133,84 @@ def test_registry_require_helpers_raise_for_missing_or_wrong_type() -> None:
 
     with pytest.raises(TypeError, match="不是 int"):
         registry.require_int_observation("puts")
+
+
+def test_registry_snapshot_can_filter_layers_and_limit_each_layer() -> None:
+    registry = EvidenceRegistry()
+    registry.set_context(
+        "workflow.current_checkpoint",
+        "menu",
+        kind=ContextKind.SESSION,
+        domain=RecordDomain.WORKFLOW,
+    )
+    registry.record_fact(
+        "libc.base",
+        0x7F0001200000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+    registry.record_fact(
+        "resolved.system",
+        0x7F0001249000,
+        kind=FactKind.SYMBOL_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+
+    snapshot = registry.snapshot(layers=("context", "facts"), limit=1)
+
+    assert list(snapshot["layers"]) == ["context", "facts"]
+    assert snapshot["summary"] == {"context": 1, "facts": 1, "total": 2}
+    assert [item.name for item in snapshot["layers"]["facts"]] == ["libc.base"]
+
+
+def test_registry_render_can_skip_artifact_layer_output() -> None:
+    registry = EvidenceRegistry()
+    registry.record_fact(
+        "libc.base",
+        0x7F0001200000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+        source="infer",
+        confidence=0.95,
+    )
+    registry.record_artifact(
+        "ret2libc.payload",
+        b"AAAA",
+        kind=ArtifactKind.PAYLOAD,
+        domain=RecordDomain.TEMPLATE,
+    )
+
+    standard_lines = registry.render(detail="standard")
+    skipped_lines = registry.render(detail="standard", artifact_mode="skip")
+
+    assert any("facts=1 arts=1 total=2" in line for line in standard_lines)
+    assert any("bytes[len=4]" in line for line in standard_lines)
+    assert any("conf=0.95" in line for line in standard_lines)
+    assert any("facts=1 arts=0 total=1" in line for line in skipped_lines)
+    assert "[Artifacts]" not in skipped_lines
+
+
+def test_registry_show_uses_requested_emit_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = EvidenceRegistry()
+    registry.record_fact("libc.base", 0x7F0001200000, kind=FactKind.BASE_ADDRESS)
+
+    calls: list[tuple[str, str]] = []
+
+    class _StubLog:
+        def debug(self, message: str) -> None:
+            calls.append(("debug", message))
+
+        def info(self, message: str) -> None:
+            calls.append(("info", message))
+
+        def warning(self, message: str) -> None:
+            calls.append(("warning", message))
+
+    monkeypatch.setattr(registry_service, "log", _StubLog())
+
+    lines = registry.show(layers="facts", detail="compact", emit="warning")
+
+    assert lines
+    assert calls
+    assert all(level == "warning" for level, _ in calls)
+    assert calls[0][1].startswith("[Registry]")
