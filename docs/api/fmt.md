@@ -107,9 +107,11 @@ result = s.fmt.find_offset(
 
 默认 `verify=False`，保留原有快速路径。
 
-调试期如果希望看到验证进度，可以保留 `loginfo=True`（脚本态语法糖默认开启），会输出 verify start / passed / failed 的简短反馈。验证 replay 会话默认使用静默日志级别，不刷第二个进程的 debug IO。
+调试期如果希望看到探测与验证反馈，可以保留 `loginfo=True`（脚本态语法糖默认开启）。验证 replay 会话默认使用静默日志级别，不刷第二个进程的 debug IO。
 
 `replay_silent=True` 只应抑制 replay 子会话日志，不应影响主会话后续 `loginfo` 输出。内部会在 replay 结束后恢复调用前的全局日志级别。
+
+如果需要看 replay 事件模型和执行顺序细节，见：[Replay API](replay.md)。
 
 当 `loginfo=True` 且 `verify=True` 时，原有两行 offset 输出仍会保留，并额外追加一行验证摘要：
 

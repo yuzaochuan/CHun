@@ -82,6 +82,8 @@
 
 这里的大 payload 不直接内联到 event 里，而是通过 blob ref 去重引用。
 
+详细方法级说明（事件模型、切片语义、重放顺序、日志恢复、边界约束）见：[Replay API](replay.md)。
+
 ### Observation 验证与晋升
 
 新增最小闭环：
