@@ -34,6 +34,7 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - 显式挂出 `rec` / `infer` / `resolve` / `dbg` / `crash` 等 session 核心能力
 - 显式挂出 `sendlineafter()` / `recvline()` / `interactive()` 以及 `sla()` / `rl()` / `ia()` 等高频方法
 - 显式挂出 `recv_leak()`，用于脚本态直接接收并记录 leak
+- 显式挂出 `replay()`，用于脚本态按“当前位置前缀”回放并注入 payload
 - `session` / `io`：保留为底层出口
 
 显式工厂与 `CHun.script()` 在内部都会先收敛到同一套 `TargetSpec` / `TransportSpec` builder，再交给 `from_specs()` 组装 session。
@@ -143,6 +144,10 @@ t.gdb("b *main\nc")
 - `t.recv_leak(..., mode="raw")` 默认按常见 CTF 泄漏习惯读取 32 位 `4` 字节、64 位 `6` 字节，再按 `t.elf.bytes` 补零解析
 - `t.recv_leak(..., mode="hex")` 会从读到的文本里提取全部 `0x...` 地址 token；默认取第一个，可用 `index=` 指定第几个命中
 - `t.recv_leak(..., mode="hex", delim=..., delim_end=...)` 可限定提取窗口到两个分隔符之间；若命中多个地址会 `warning` 输出完整列表和默认选中的地址
+- `t.replay(payload, checkpoint=...)` 默认把“当前调用位置”当作 checkpoint 回放前缀；传 `checkpoint=` 时按 `[:checkpoint]` 回放
+- `t.replay(action, *args, action_kwargs=...)` 支持函数模式；无需改外部函数签名，语法糖会在 replay 子会话里临时绑定全局 `s`
+- `t.replay(..., expected=...)` 可做命中判断；`capture_replay_registry=True` 回传 replay 子会话 rec 展示到 `result.metadata["replay_registry_lines"]`
+- `t.replay(..., show_recv=True)` 会输出 `[replay recv]`；内部会临时提升日志级别后再恢复，不受 `replay_silent` 影响
 - `t.libc_base` / `t.libc_version` 以及 `t.session.libc_base` / `t.session.libc_version` 提供快捷读取；若尚未确认则抛 `RuntimeError`
 - `t.resolve.symbol("str_bin_sh")` / `t.resolve.symbol("puts@got")` 会自动做后缀剥离和 alias 归一化；已绑定 `t.libc` 时优先走本地 `libc_elf + libc.base`，否则回退到 `libc.version + catalog`
 - 访问 `t.session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
@@ -210,6 +215,14 @@ print(result.responses[0])
 s = CHun.script("./challenge").start()
 result = s.fmt.find_offset(max_slots=16)
 print(result.index)
+
+verify = s.replay(b"7", show_recv=True)
+print(verify.ok, verify.reason)
+
+# 函数模式（保持外部函数不改）
+# def show(index): menu(3); s.sla(b"Index: ", str(index).encode())
+verify2 = s.replay(show, 7, show_recv=True)
+print(verify2.ok, verify2.reason)
 ```
 
 ```python

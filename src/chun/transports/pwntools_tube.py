@@ -119,18 +119,24 @@ class PwntoolsTubeTransport(BaseTransport):
     def send(self, data: bytes) -> None:
         self._require_open()
         self._tube.send(data)
+        self._emit_replay("send", payload=bytes(data))
 
     def sendline(self, data: bytes) -> None:
         self._require_open()
         self._tube.sendline(data)
+        self._emit_replay("sendline", payload=bytes(data))
 
     def sendafter(self, delim: bytes, data: bytes) -> None:
         self._require_open()
         self._tube.sendafter(delim, data)
+        self._emit_replay("expect", payload=self._ensure_bytes(delim), drop=False)
+        self._emit_replay("send", payload=bytes(data))
 
     def sendlineafter(self, delim: bytes, data: bytes) -> None:
         self._require_open()
         self._tube.sendlineafter(delim, data)
+        self._emit_replay("expect", payload=self._ensure_bytes(delim), drop=False)
+        self._emit_replay("sendline", payload=bytes(data))
 
     def recv(self, n: int = 4096) -> bytes:
         self._require_open()
@@ -138,11 +144,19 @@ class PwntoolsTubeTransport(BaseTransport):
 
     def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
         self._require_open()
-        return self._tube.recvuntil(delim, drop=drop)
+        result = self._tube.recvuntil(delim, drop=drop)
+        self._emit_replay("expect", payload=self._ensure_bytes(delim), drop=bool(drop))
+        return result
 
     def interactive(self) -> None:
         self._require_open()
         self._tube.interactive()
+
+    @staticmethod
+    def _ensure_bytes(value: bytes | str) -> bytes:
+        if isinstance(value, bytes):
+            return value
+        return value.encode()
 
 
 __all__ = ["PwntoolsTubeTransport"]

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
 from ..plugins.fmt import FmtService
+from ..transports import build_transport
 from ..transports.base import BaseTransport
 from .analysis import CorefileAnalyzer
 from .catalog import LibcCatalogService
 from .inference import InferenceService
 from .models import ContextKind, RecordDomain, TargetSpec, TransportSpec
+from .replay import ReplayEventKind
 from .registry import EvidenceRegistry
 from .resolve import ResolveService
 
@@ -45,6 +48,11 @@ class CHunSession:
     resolve: ResolveService = field(init=False)
     crash: CorefileAnalyzer = field(init=False)
     fmt: FmtService = field(init=False)
+    replay_session_factory: Callable[[], "CHunSession"] | None = field(
+        default=None,
+        repr=False,
+    )
+    replay_silent: bool = True
 
     def __post_init__(self) -> None:
         self.infer = InferenceService(
@@ -61,6 +69,7 @@ class CHunSession:
         self.crash = CorefileAnalyzer(self.registry)
         self.fmt = FmtService(self)
         self._seed_context()
+        self._bind_replay_hook()
 
     def _seed_context(self) -> None:
         self.registry.set_context(
@@ -157,6 +166,31 @@ class CHunSession:
         """重建 transport。"""
         self.transport.reconnect()
         self._sync_transport_context()
+
+    def checkpoint(self, name: str, *, metadata: dict[str, object] | None = None) -> object:
+        """在 replay trace 中打一个手工检查点。"""
+        return self.rec.checkpoint(name, metadata=metadata or {})
+
+    def make_replay_session(self) -> "CHunSession":
+        """构造用于 replay 验证的独立 session。"""
+        if self.replay_session_factory is not None:
+            return self.replay_session_factory()
+        target = deepcopy(self.target)
+        spec = deepcopy(self.transport_spec)
+        if self.replay_silent:
+            target.metadata = dict(target.metadata)
+            target.metadata["log_level"] = "error"
+        replay_session = CHunSession(
+            target=target,
+            transport_spec=spec,
+            transport=build_transport(target, spec),
+        )
+        replay_session.bind_binaries(
+            elf=self.elf,
+            libc_elf=self.libc_elf,
+            source="replay.clone",
+        )
+        return replay_session
 
     @property
     def rec(self) -> EvidenceRegistry:
@@ -271,6 +305,41 @@ class CHunSession:
                 domain=RecordDomain.ELF,
                 source=source,
             )
+
+    def _bind_replay_hook(self) -> None:
+        if hasattr(self.transport, "bind_replay_hook"):
+            self.transport.bind_replay_hook(self._handle_transport_replay_event)
+
+    def _handle_transport_replay_event(self, event: str, payload: dict[str, object]) -> None:
+        if event == "spawn":
+            self.rec.append_event(
+                ReplayEventKind.SPAWN,
+                metadata={
+                    "target_kind": payload.get("target_kind"),
+                    "binary": payload.get("binary"),
+                    "host": payload.get("host"),
+                    "port": payload.get("port"),
+                },
+            )
+            return
+        if event == "send":
+            data = payload.get("payload")
+            if isinstance(data, bytes):
+                self.rec.append_event(ReplayEventKind.SEND, payload=data)
+            return
+        if event == "sendline":
+            data = payload.get("payload")
+            if isinstance(data, bytes):
+                self.rec.append_event(ReplayEventKind.SENDLINE, payload=data)
+            return
+        if event == "expect":
+            data = payload.get("payload")
+            if isinstance(data, bytes):
+                self.rec.append_event(
+                    ReplayEventKind.EXPECT,
+                    payload=data,
+                    drop=bool(payload.get("drop", False)),
+                )
 
     @staticmethod
     def _binary_endian(binary: object) -> str | None:

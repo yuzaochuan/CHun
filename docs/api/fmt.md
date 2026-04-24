@@ -79,6 +79,48 @@ print(result.matched_token)
 - artifact: `fmt.offset.probe`
 - fact: `fmt.offset`
 
+### 自动验证（可选）
+
+`find_offset()` 现在支持可选验证：
+
+```python
+result = s.fmt.find_offset(
+    max_slots=16,
+    verify=True,
+    verify_marker=b"aabb",
+)
+```
+
+行为是：
+
+1. 先探测 offset（写 observation / artifact）
+2. 使用 `rec` 当前 replay trace 新开独立 session 回放到当前 IO 点
+  - 默认回放到“本次探测发送之前”的节点，再注入验证 probe
+  - 避免把 `find_offset` 探测 payload 本身二次发送进验证链
+3. 注入 `marker + b"%<offset>$p"` 探针
+4. `predicate` 命中后再晋升 `fmt.offset` fact
+
+如果验证失败：
+
+- 保留 observation（含 `verification_status=failed`）
+- 不晋升 `fmt.offset` fact
+
+默认 `verify=False`，保留原有快速路径。
+
+调试期如果希望看到探测与验证反馈，可以保留 `loginfo=True`（脚本态语法糖默认开启）。验证 replay 会话默认使用静默日志级别，不刷第二个进程的 debug IO。
+
+`replay_silent=True` 只应抑制 replay 子会话日志，不应影响主会话后续 `loginfo` 输出。内部会在 replay 结束后恢复调用前的全局日志级别。
+
+如果需要看 replay 事件模型和执行顺序细节，见：[Replay API](replay.md)。
+
+当 `loginfo=True` 且 `verify=True` 时，原有两行 offset 输出仍会保留，并额外追加一行验证摘要：
+
+- `fmt offset found: ...`
+- `fmt offset detail: ...`
+- `fmt offset verify result: status=...`
+
+验证阶段对 `%p` 的命中判定使用“marker 是否出现在 pointer bytes 中”，因此像 `aabb%6$p` 回显成 `0x7024362562626161` 这类携带后缀格式串字节的结果也能被识别为通过。
+
 ### `get_offset()`
 
 从 `registry` 读取已经确认的 `fmt.offset`，并组装为 `FmtOffset` 返回。

@@ -11,6 +11,7 @@ from chun.core.models import (
     ObservationKind,
     RecordDomain,
 )
+from chun.core.replay import VerificationResult
 from chun.core.registry import EvidenceRegistry
 
 
@@ -214,3 +215,84 @@ def test_registry_show_uses_requested_emit_level(monkeypatch: pytest.MonkeyPatch
     assert calls
     assert all(level == "warning" for level, _ in calls)
     assert calls[0][1].startswith("[Registry]")
+
+
+def test_registry_to_dict_supports_replay_mappingproxy_metadata() -> None:
+    registry = EvidenceRegistry()
+    registry.append_event("spawn", metadata={"target_kind": "process"})
+    registry.append_event("sendline", payload=b"3\n")
+    registry.checkpoint("io_node_1", metadata={"tag": "manual"})
+
+    payload = registry.to_dict()
+    replay = payload["replay"]
+    events = replay["events"]
+    checkpoints = replay["checkpoints"]
+
+    assert len(events) == 3
+    assert events[0]["kind"] == "spawn"
+    assert events[0]["metadata"]["target_kind"] == "process"
+    assert events[1]["kind"] == "sendline"
+    assert events[1]["payload"]["size"] == 2
+    assert events[2]["kind"] == "checkpoint"
+    assert checkpoints["io_node_1"]["name"] == "io_node_1"
+    assert checkpoints["io_node_1"]["metadata"]["tag"] == "manual"
+
+
+def test_registry_can_render_and_show_replay(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = EvidenceRegistry()
+    registry.append_event("spawn", metadata={"target_kind": "process"})
+    registry.append_event("sendline", payload=b"3\n")
+    registry.checkpoint("io_node_1")
+
+    rendered = registry.render_replay(include_payload=True, payload_mode="repr")
+    assert rendered
+    assert rendered[0].startswith("[Replay]")
+    assert any("payload=b'3\\n'" in line for line in rendered)
+
+    calls: list[tuple[str, str]] = []
+
+    class _StubLog:
+        def debug(self, message: str) -> None:
+            calls.append(("debug", message))
+
+        def info(self, message: str) -> None:
+            calls.append(("info", message))
+
+        def warning(self, message: str) -> None:
+            calls.append(("warning", message))
+
+    monkeypatch.setattr(registry_service, "log", _StubLog())
+    lines = registry.show_replay(emit="warning", include_payload=False, limit=2)
+    assert lines
+    assert calls
+    assert all(level == "warning" for level, _ in calls)
+
+
+def test_registry_run_replay_can_request_replay_registry_capture() -> None:
+    registry = EvidenceRegistry()
+    registry.append_event("sendline", payload=b"3\n")
+    captured: dict[str, object] = {}
+
+    class _StubExecutor:
+        def replay(self, trace: tuple[object, ...], **kwargs: object) -> VerificationResult:
+            captured["trace_len"] = len(trace)
+            captured.update(kwargs)
+            return VerificationResult(run_id="run", ok=True, reason="predicate_pass")
+
+    result = registry.run_replay(
+        session_factory=lambda: object(),
+        executor=_StubExecutor(),  # type: ignore[arg-type]
+        probe=b"7",
+        predicate=lambda _out: True,
+        capture_replay_registry=True,
+        replay_registry_layers=("context", "facts"),
+        replay_registry_detail="compact",
+        replay_registry_limit=3,
+    )
+
+    assert result.ok is True
+    assert captured["trace_len"] == 1
+    assert captured["capture_registry"] is True
+    assert captured["registry_layers"] == ("context", "facts")
+    assert captured["registry_detail"] == "compact"
+    assert captured["registry_limit"] == 3

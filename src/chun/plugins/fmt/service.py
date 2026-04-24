@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Mapping, Protocol, Sequence
 
@@ -28,10 +29,12 @@ from ...core.models import (
     FmtWriteStrategy,
     FmtWriteTask,
     FactKind,
+    ObservationKind,
     RecordDomain,
     RenderedFmtTask,
     ValueLike,
 )
+from ...core.replay import ReplayExecutor
 from .errors import (
     FmtConfigurationError,
     FmtExecutionError,
@@ -48,6 +51,8 @@ from .writers import DefaultFmtPlanExecutor
 
 if TYPE_CHECKING:
     from chun.core.session import CHunSession
+
+_POINTER_TOKEN_RE = re.compile(rb"0x[0-9a-fA-F]+")
 
 
 @dataclass(slots=True, frozen=True)
@@ -67,6 +72,7 @@ class FmtOffsetProbe(Protocol):
         session: "CHunSession",
         *,
         mode: FmtOffsetProbeMode | str = FmtOffsetProbeMode.SEQUENTIAL,
+        store_fact: bool = True,
         **kwargs: object,
     ) -> FmtOffsetProbeResult: ...
 
@@ -283,6 +289,11 @@ class FmtService:
         sep: bytes = b".",
         signature: bytes | None = None,
         store: bool = True,
+        verify: bool = False,
+        verify_marker: bytes = b"aabb",
+        verify_from_checkpoint: str | None = None,
+        verify_promote: bool = True,
+        verify_loginfo: bool | None = None,
         loginfo: bool = False,
         source: str = "fmt.probe",
     ) -> FmtOffsetProbeResult:
@@ -295,6 +306,8 @@ class FmtService:
         if self._prober is None:
             raise FmtConfigurationError("no fmt prober configured")
 
+        _ = self.session.io
+        replay_upper_bound = self.session.rec.replay.cursor_seq
         result = self._prober.find_offset(
             self.session,
             mode=mode,
@@ -304,11 +317,147 @@ class FmtService:
             sep=sep,
             signature=signature,
             store=store,
+            store_fact=store and not verify,
             source=source,
         )
+        if verify and store and result.index is not None:
+            emit_verify_log = loginfo if verify_loginfo is None else bool(verify_loginfo)
+            result = self._verify_offset_result(
+                result,
+                marker=verify_marker,
+                from_checkpoint=verify_from_checkpoint,
+                promote=verify_promote,
+                replay_upper_bound=replay_upper_bound,
+            )
+        else:
+            emit_verify_log = False
+            if verify and loginfo:
+                log.warning(
+                    "fmt offset verify skipped: "
+                    f"store={store} index={result.index}"
+                )
         if loginfo:
             self._log_find_offset_result(result)
+        if verify and emit_verify_log:
+            self._log_verify_offset_result(result)
         return result
+
+    def _verify_offset_result(
+        self,
+        result: FmtOffsetProbeResult,
+        *,
+        marker: bytes,
+        from_checkpoint: str | None,
+        promote: bool,
+        replay_upper_bound: int,
+    ) -> FmtOffsetProbeResult:
+        if result.index is None:
+            return result
+        observation = self.session.rec.record_observation(
+            "fmt.offset.candidate",
+            result.index,
+            kind=ObservationKind.SCALAR,
+            domain=RecordDomain.FMT,
+            source="fmt.find_offset",
+            confidence=result.confidence,
+            tags=["fmt", "offset", "candidate"],
+            metadata={
+                "verification_status": "pending",
+                "probe_method": result.method.value,
+                "matched_token": result.matched_token,
+            },
+            overwrite=True,
+        )
+        arch = self._read_arch_context()
+        probe = marker + f"%{result.index}$p".encode()
+        executor = ReplayExecutor(self.session.rec.replay.blob_store)
+        verify_result = self.session.rec.validate_observation(
+            observation.name,
+            session_factory=self.session.make_replay_session,
+            executor=executor,
+            probe=probe,
+            from_checkpoint=from_checkpoint,
+            end_seq_exclusive=replay_upper_bound,
+            predicate=lambda output: self._verify_probe_output(
+                output,
+                marker=marker,
+                pointer_size=arch.pointer_size,
+                endian=arch.endian,
+            ),
+            promote_to_fact=promote,
+            fact_name="fmt.offset",
+            fact_kind=FactKind.OFFSET,
+            fact_source="fmt.verify",
+            fact_confidence=max(result.confidence, 0.95),
+        )
+        verified_result = replace(
+            result,
+            verified=verify_result.ok,
+            confidence=max(result.confidence, 0.95) if verify_result.ok else result.confidence,
+            metadata={
+                **dict(result.metadata),
+                "verification_run_id": verify_result.run_id,
+                "verification_status": "passed" if verify_result.ok else "failed",
+                "verification_reason": verify_result.reason,
+                "verification_replay_end_seq": replay_upper_bound,
+            },
+        )
+        self.session.rec.record_artifact(
+            "fmt.offset.probe",
+            verified_result,
+            domain=RecordDomain.FMT,
+            source="fmt.verify",
+            tags=["fmt", "offset", "probe", "verification"],
+            metadata={
+                "verified": verify_result.ok,
+                "verification_run_id": verify_result.run_id,
+            },
+            overwrite=True,
+        )
+        return verified_result
+
+    @staticmethod
+    def _verify_probe_output(
+        output: bytes,
+        *,
+        marker: bytes,
+        pointer_size: int,
+        endian: str,
+    ) -> bool:
+        if pointer_size <= 0:
+            return False
+        for token in _POINTER_TOKEN_RE.findall(output):
+            try:
+                token_value = int(token, 16)
+            except ValueError:
+                continue
+            size = max(pointer_size, (token_value.bit_length() + 7) // 8 or 1)
+            try:
+                raw = token_value.to_bytes(size, byteorder=endian, signed=False)
+            except OverflowError:
+                continue
+            if marker in raw:
+                return True
+            if marker in raw.rstrip(b"\x00"):
+                return True
+        return False
+
+    @staticmethod
+    def _log_verify_offset_result(result: FmtOffsetProbeResult) -> None:
+        status = "passed" if result.verified else "failed"
+        metadata = dict(result.metadata)
+        run_id = metadata.get("verification_run_id")
+        reason = metadata.get("verification_reason")
+        replay_end_seq = metadata.get("verification_replay_end_seq")
+        message = (
+            "fmt offset verify result: "
+            f"status={status} index={result.index} "
+            f"run_id={run_id} reason={reason} replay_end_seq={replay_end_seq}"
+        )
+        if result.verified:
+            log.success(message)
+        else:
+            log.warning(message)
 
     @staticmethod
     def _log_find_offset_result(result: FmtOffsetProbeResult) -> None:

@@ -18,6 +18,12 @@
 
 详见：[Registry API](registry.md)
 
+## `Replay`
+
+职责：提供 compact replay trace 的记录、切片、独立会话回放与 probe 验证执行能力，是 `fmt` 自动验证等运行期能力的基础设施。
+
+详见：[Replay API](replay.md)
+
 ## Debug / Resolve
 
 职责：提供 `session.dbg`、`session.gdb_mi`、`session.resolve`、`session.crash`，打通 GDB、DynELF、core dump 三条关键 workflow。

@@ -9,6 +9,7 @@ import pytest
 
 from chun import CHun
 from chun.core.models import FactKind, RecordDomain
+from chun.core.replay import VerificationResult
 from chun.core.registry import EvidenceRegistry
 from chun.core.models import TargetSpec
 import chun.script as script_mod
@@ -1154,6 +1155,198 @@ def test_script_explicit_io_methods_and_aliases_forward_to_io(
         ("recvline", (), {"keepends": True}),
         ("interactive", (), {}),
     ]
+
+
+def test_script_replay_sugar_uses_prefix_before_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    captured: dict[str, Any] = {}
+
+    checkpoint_entry = SimpleNamespace(event_seq=42)
+
+    class _RecStub:
+        replay = SimpleNamespace(
+            checkpoints={"io_node_1": checkpoint_entry},
+            blob_store=object(),
+            cursor_seq=99,
+        )
+
+        def run_replay(self, **kwargs: Any) -> VerificationResult:
+            captured.update(kwargs)
+            old_level = script_mod.context.log_level
+            try:
+                script_mod.context.log_level = "error"
+                expected_error_level = script_mod.context.log_level
+                assert kwargs["predicate"](b"xxokyy") is True
+                assert script_mod.context.log_level == expected_error_level
+            finally:
+                script_mod.context.log_level = old_level
+            return VerificationResult(
+                run_id="run-id",
+                ok=True,
+                reason="predicate_pass",
+            )
+
+    session.rec = _RecStub()
+    session.make_replay_session = lambda: object()  # type: ignore[attr-defined]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    messages: list[str] = []
+    monkeypatch.setattr(script_mod.log, "info", messages.append)
+
+    entry = CHun.script("./challenge").start()
+    result = entry.replay(
+        b"7",
+        checkpoint="io_node_1",
+        expected=b"ok",
+        show_recv=True,
+        capture_replay_registry=True,
+    )
+
+    assert result.ok is True
+    assert captured["probe"] == b"7"
+    assert captured["end_seq_exclusive"] == 42
+    assert captured["capture_replay_registry"] is True
+    assert captured["session_factory"] is session.make_replay_session
+    assert any(line.startswith("[replay recv] len=") for line in messages)
+    assert any("00000000" in line for line in messages)
+
+
+def test_script_replay_sugar_defaults_to_current_position(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    captured: dict[str, Any] = {}
+
+    class _RecStub:
+        replay = SimpleNamespace(
+            checkpoints={},
+            blob_store=object(),
+            cursor_seq=73,
+        )
+
+        def run_replay(self, **kwargs: Any) -> VerificationResult:
+            captured.update(kwargs)
+            assert kwargs["predicate"](b"anything") is True
+            return VerificationResult(
+                run_id="run-id",
+                ok=True,
+                reason="predicate_pass",
+            )
+
+    session.rec = _RecStub()
+    session.make_replay_session = lambda: object()  # type: ignore[attr-defined]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    result = entry.replay(b"7")
+
+    assert result.ok is True
+    assert captured["probe"] == b"7"
+    assert captured["end_seq_exclusive"] == 73
+
+
+def test_script_replay_sugar_supports_callable_with_multi_args_and_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    replay_session = DummySession(kind="process")
+    replay_session.rec = EvidenceRegistry()
+    registry = EvidenceRegistry()
+    registry.append_event("sendline", payload=b"warmup\n")
+    session.rec = registry
+    session.make_replay_session = lambda: replay_session  # type: ignore[attr-defined]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    def _menu(choice: int) -> None:
+        s.sla(b"> ", str(choice).encode())
+
+    def _show(index: int, suffix: bytes, *, with_menu: bool = True) -> None:
+        if with_menu:
+            _menu(3)
+        s.sla(b"Index: ", str(index).encode() + suffix)
+
+    marker = object()
+    had_global_s = "s" in globals()
+    old_global_s = globals().get("s", marker)
+    globals()["s"] = marker
+    try:
+        entry = CHun.script("./challenge").start()
+        result = entry.replay(
+            _show,
+            7,
+            b"!",
+            action_kwargs={"with_menu": True},
+            expected=b"recv",
+            show_recv=True,
+        )
+    finally:
+        if had_global_s:
+            globals()["s"] = old_global_s
+        else:
+            globals().pop("s", None)
+
+    assert result.ok is True
+    assert result.reason == "predicate_pass"
+    assert session.io.calls == []
+    assert replay_session.io.calls == [
+        ("sendline", (b"warmup\n",), {}),
+        ("sendlineafter", (b"> ", b"3"), {}),
+        ("sendlineafter", (b"Index: ", b"7!"), {}),
+        ("recv", (4096,), {}),
+    ]
+
+
+def test_script_replay_sugar_raises_for_missing_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = SimpleNamespace(
+        replay=SimpleNamespace(checkpoints={}, blob_store=object(), cursor_seq=0),
+    )
+    session.make_replay_session = lambda: object()  # type: ignore[attr-defined]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    with pytest.raises(KeyError, match="replay checkpoint 不存在：io_node_1"):
+        entry.replay(b"7", checkpoint="io_node_1")
 
 
 def test_script_recv_leak_reads_raw_bytes_and_records_symbol_leak(

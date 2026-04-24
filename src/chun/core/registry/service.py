@@ -7,6 +7,14 @@ from enum import Enum
 from typing import Any, Callable, Iterable, Literal, TypeVar, cast
 
 from ..._compat import log
+from ..replay import (
+    ReplayCheckpoint,
+    ReplayEvent,
+    ReplayEventKind,
+    ReplayExecutor,
+    ReplayRecorder,
+    VerificationResult,
+)
 
 from ..errors import RegistryConflictError
 from ..models import (
@@ -27,6 +35,7 @@ RegistryLayer = Literal["context", "observations", "facts", "artifacts"]
 RegistryDetail = Literal["compact", "standard", "verbose"]
 RegistryEmit = Literal["debug", "info", "warning"]
 RegistryArtifactMode = Literal["summary", "repr", "skip"]
+ReplayPayloadMode = Literal["repr", "hex"]
 
 _LAYER_ORDER: tuple[RegistryLayer, ...] = ("context", "observations", "facts", "artifacts")
 _LAYER_LABELS: dict[RegistryLayer, str] = {
@@ -44,6 +53,7 @@ _LAYER_ABBR: dict[RegistryLayer, str] = {
 _DETAIL_VALUES = {"compact", "standard", "verbose"}
 _EMIT_VALUES = {"debug", "info", "warning"}
 _ARTIFACT_MODE_VALUES = {"summary", "repr", "skip"}
+_REPLAY_PAYLOAD_MODE_VALUES = {"repr", "hex"}
 
 
 class EvidenceRegistry:
@@ -54,6 +64,7 @@ class EvidenceRegistry:
         self.facts: dict[str, Fact] = {}
         self.artifacts: dict[str, Artifact] = {}
         self.context: dict[str, ContextEntry] = {}
+        self.replay: ReplayRecorder = ReplayRecorder()
 
     def _store(self, bucket: dict[str, T], record: T, *, overwrite: bool) -> T:
         if not overwrite and record.name in bucket:
@@ -632,12 +643,331 @@ class EvidenceRegistry:
             emitter(line)
         return lines
 
+    @staticmethod
+    def _normalize_replay_payload_mode(mode: ReplayPayloadMode) -> ReplayPayloadMode:
+        if mode not in _REPLAY_PAYLOAD_MODE_VALUES:
+            allowed = ", ".join(sorted(_REPLAY_PAYLOAD_MODE_VALUES))
+            raise ValueError(f"未知 payload_mode：{mode}，可选值：{allowed}")
+        return mode
+
+    def render_replay(
+        self,
+        *,
+        from_checkpoint: str | None = None,
+        end_seq_exclusive: int | None = None,
+        limit: int | None = 20,
+        include_payload: bool = False,
+        payload_mode: ReplayPayloadMode = "repr",
+    ) -> list[str]:
+        """把 replay trace 渲染为可读文本。"""
+        normalized_payload_mode = self._normalize_replay_payload_mode(payload_mode)
+        trace = self.slice_to_here(from_checkpoint=from_checkpoint)
+        if end_seq_exclusive is not None:
+            trace = tuple(event for event in trace if event.seq < end_seq_exclusive)
+        if limit is not None:
+            if limit < 0:
+                raise ValueError("limit 不能小于 0")
+            trace = trace[-limit:]
+
+        header = (
+            f"[Replay] events={len(trace)} cursor={self.replay.cursor_seq} "
+            f"checkpoints={len(self.replay.checkpoints)}"
+        )
+        if from_checkpoint is not None:
+            header += f" from={from_checkpoint}"
+        if end_seq_exclusive is not None:
+            header += f" end_seq_exclusive={end_seq_exclusive}"
+        lines = [header]
+        if not trace:
+            lines.append("当前 Replay Trace 还没有匹配事件。")
+            return lines
+
+        for event in trace:
+            parts = [
+                f"#{event.seq:04d}",
+                event.kind.value,
+                f"drop={event.drop}",
+            ]
+            if event.metadata:
+                parts.append(f"meta={self._truncate(repr(dict(event.metadata)), limit=96)}")
+            if include_payload and event.payload is not None:
+                raw = self.replay.blob_store.get(event.payload)
+                if normalized_payload_mode == "hex":
+                    payload_text = raw.hex()
+                else:
+                    payload_text = self._truncate(repr(raw), limit=96)
+                parts.append(f"payload={payload_text}")
+            elif event.payload is not None:
+                ref = event.payload
+                parts.append(f"payload_ref={ref.blob_id}/{ref.size}")
+            lines.append(" ".join(parts))
+        return lines
+
+    def show_replay(
+        self,
+        *,
+        from_checkpoint: str | None = None,
+        end_seq_exclusive: int | None = None,
+        limit: int | None = 20,
+        include_payload: bool = False,
+        payload_mode: ReplayPayloadMode = "repr",
+        emit: RegistryEmit = "info",
+    ) -> list[str]:
+        """打印 replay trace，并返回输出文本。"""
+        normalized_emit = self._normalize_emit(emit)
+        lines = self.render_replay(
+            from_checkpoint=from_checkpoint,
+            end_seq_exclusive=end_seq_exclusive,
+            limit=limit,
+            include_payload=include_payload,
+            payload_mode=payload_mode,
+        )
+        emitter = self._resolve_emitter(normalized_emit)
+        for line in lines:
+            emitter(line)
+        return lines
+
+    def append_event(
+        self,
+        kind: ReplayEventKind | str,
+        *,
+        payload: bytes | None = None,
+        drop: bool = False,
+        metadata: dict[str, object] | None = None,
+    ) -> ReplayEvent:
+        """记录一条 compact replay event。"""
+        return self.replay.append_event(
+            kind,
+            payload=payload,
+            drop=drop,
+            metadata=metadata or {},
+        )
+
+    def checkpoint(
+        self,
+        name: str,
+        *,
+        metadata: dict[str, object] | None = None,
+    ) -> ReplayCheckpoint:
+        """记录 replay checkpoint。"""
+        return self.replay.checkpoint(name, metadata=metadata or {})
+
+    def slice_to_here(self, *, from_checkpoint: str | None = None) -> tuple[ReplayEvent, ...]:
+        """返回当前 replay trace 的可重放切片。"""
+        return self.replay.slice_to_here(from_checkpoint=from_checkpoint)
+
+    def promote_observation_to_fact(
+        self,
+        observation_name: str,
+        *,
+        fact_name: str | None = None,
+        kind: FactKind = FactKind.DERIVED,
+        source: str = "observation.promote",
+        confidence: float | None = None,
+        domain: RecordDomain | None = None,
+        evidence: list[str] | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, object] | None = None,
+        overwrite: bool = True,
+    ) -> Fact:
+        """把 observation 升级为 fact。"""
+        observation = self.require_observation(observation_name)
+        fact_domain = observation.domain if domain is None else domain
+        fact_confidence = observation.confidence if confidence is None else confidence
+        fact_tags = list(observation.tags)
+        if tags:
+            for tag in tags:
+                if tag not in fact_tags:
+                    fact_tags.append(tag)
+        fact_metadata = dict(observation.metadata)
+        fact_metadata.update(metadata or {})
+        fact_metadata.setdefault("promoted_from", observation_name)
+        return self.record_fact(
+            fact_name or observation_name,
+            observation.value,
+            kind=kind,
+            domain=fact_domain,
+            source=source,
+            confidence=fact_confidence,
+            evidence=list(evidence or [observation_name]),
+            tags=fact_tags,
+            metadata=fact_metadata,
+            overwrite=overwrite,
+        )
+
+    def _update_observation_metadata(
+        self,
+        observation_name: str,
+        *,
+        metadata_patch: dict[str, object],
+        overwrite: bool = True,
+    ) -> Observation:
+        observation = self.require_observation(observation_name)
+        metadata = dict(observation.metadata)
+        metadata.update(metadata_patch)
+        return self.record_observation(
+            observation.name,
+            observation.value,
+            kind=observation.kind,
+            domain=observation.domain,
+            source=observation.source,
+            confidence=observation.confidence,
+            tags=list(observation.tags),
+            metadata=metadata,
+            overwrite=overwrite,
+        )
+
+    def validate_observation(
+        self,
+        observation_name: str,
+        *,
+        session_factory: Callable[[], object],
+        executor: ReplayExecutor,
+        probe: bytes,
+        predicate: Callable[[bytes], bool],
+        from_checkpoint: str | None = None,
+        end_seq_exclusive: int | None = None,
+        promote_to_fact: bool = True,
+        fact_name: str | None = None,
+        fact_kind: FactKind = FactKind.DERIVED,
+        fact_source: str = "observation.verify",
+        fact_confidence: float | None = None,
+        capture_replay_registry: bool = False,
+        replay_registry_layers: Iterable[RegistryLayer] | RegistryLayer = _LAYER_ORDER,
+        replay_registry_detail: RegistryDetail = "standard",
+        replay_registry_limit: int | None = None,
+    ) -> VerificationResult:
+        """基于 replay trace 验证 observation，并可选自动晋升 fact。"""
+        result = self.run_replay(
+            session_factory=session_factory,
+            executor=executor,
+            probe=probe,
+            predicate=predicate,
+            from_checkpoint=from_checkpoint,
+            end_seq_exclusive=end_seq_exclusive,
+            capture_replay_registry=capture_replay_registry,
+            replay_registry_layers=replay_registry_layers,
+            replay_registry_detail=replay_registry_detail,
+            replay_registry_limit=replay_registry_limit,
+        )
+        self._update_observation_metadata(
+            observation_name,
+            metadata_patch={
+                "verification_status": "passed" if result.ok else "failed",
+                "verified_by": result.run_id,
+                "verification_reason": result.reason,
+                "verification_output_preview": result.output_preview,
+            },
+        )
+        if result.ok and promote_to_fact:
+            self.promote_observation_to_fact(
+                observation_name,
+                fact_name=fact_name,
+                kind=fact_kind,
+                source=fact_source,
+                confidence=fact_confidence,
+                metadata={"validated_by": result.run_id},
+                overwrite=True,
+            )
+        return result
+
+    def run_replay(
+        self,
+        *,
+        session_factory: Callable[[], object],
+        executor: ReplayExecutor,
+        probe: bytes,
+        predicate: Callable[[bytes], bool],
+        from_checkpoint: str | None = None,
+        end_seq_exclusive: int | None = None,
+        capture_replay_registry: bool = False,
+        replay_registry_layers: Iterable[RegistryLayer] | RegistryLayer = _LAYER_ORDER,
+        replay_registry_detail: RegistryDetail = "standard",
+        replay_registry_limit: int | None = None,
+    ) -> VerificationResult:
+        """直接执行 replay + probe，不触发 observation/fact 语义。"""
+        trace = self.slice_to_here(from_checkpoint=from_checkpoint)
+        if end_seq_exclusive is not None:
+            trace = tuple(event for event in trace if event.seq < end_seq_exclusive)
+        layers = self._normalize_layers(replay_registry_layers)
+        detail = self._normalize_detail(replay_registry_detail)
+        return executor.replay(
+            trace,
+            session_factory=session_factory,
+            probe=probe,
+            predicate=predicate,
+            capture_registry=capture_replay_registry,
+            registry_layers=layers,
+            registry_detail=detail,
+            registry_limit=replay_registry_limit,
+        )
+
+    def replay(
+        self,
+        *,
+        session_factory: Callable[[], object],
+        executor: ReplayExecutor,
+        probe: bytes,
+        predicate: Callable[[bytes], bool],
+        from_checkpoint: str | None = None,
+    ) -> VerificationResult:
+        """兼容入口：转发到 run_replay()."""
+        return self.run_replay(
+            session_factory=session_factory,
+            executor=executor,
+            probe=probe,
+            predicate=predicate,
+            from_checkpoint=from_checkpoint,
+        )
+
+    @staticmethod
+    def _serialize_payload_ref(payload: object | None) -> dict[str, object] | None:
+        if payload is None:
+            return None
+        if not hasattr(payload, "blob_id"):
+            return None
+        return {
+            "blob_id": str(getattr(payload, "blob_id")),
+            "sha256": str(getattr(payload, "sha256")),
+            "size": int(getattr(payload, "size")),
+        }
+
+    @classmethod
+    def _serialize_replay_event(cls, event: ReplayEvent) -> dict[str, object]:
+        return {
+            "seq": event.seq,
+            "ts_ns": event.ts_ns,
+            "kind": event.kind.value,
+            "payload": cls._serialize_payload_ref(event.payload),
+            "drop": bool(event.drop),
+            "metadata": dict(event.metadata),
+        }
+
+    @classmethod
+    def _serialize_replay_checkpoint(cls, checkpoint: ReplayCheckpoint) -> dict[str, object]:
+        return {
+            "name": checkpoint.name,
+            "event_seq": checkpoint.event_seq,
+            "trace_digest": checkpoint.trace_digest,
+            "metadata": dict(checkpoint.metadata),
+        }
+
     def to_dict(self) -> dict[str, object]:
         return {
             "observations": {name: asdict(item) for name, item in self.observations.items()},
             "facts": {name: asdict(item) for name, item in self.facts.items()},
             "artifacts": {name: asdict(item) for name, item in self.artifacts.items()},
             "context": {name: asdict(item) for name, item in self.context.items()},
+            "replay": {
+                "events": [
+                    self._serialize_replay_event(event)
+                    for event in self.replay.iter_events()
+                ],
+                "checkpoints": {
+                    name: self._serialize_replay_checkpoint(item)
+                    for name, item in self.replay.checkpoints.items()
+                },
+            },
         }
 
 __all__ = ["EvidenceRegistry"]
