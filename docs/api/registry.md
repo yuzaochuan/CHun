@@ -78,11 +78,23 @@
 - `append_event(...)`
 - `checkpoint(name, ...)`
 - `slice_to_here(from_checkpoint=...)`
-- `replay(...)`
+- `render_replay(...)` / `show_replay(...)`
+- `run_replay(...)`
 
 这里的大 payload 不直接内联到 event 里，而是通过 blob ref 去重引用。
 
 详细方法级说明（事件模型、切片语义、重放顺序、日志恢复、边界约束）见：[Replay API](replay.md)。
+
+注意：`show()` 目前只展示 `context / observations / facts / artifacts` 四层，不会把 replay events 混在这四层输出里。
+
+如果你要查看 replay 记录，使用：
+
+```python
+events = list(session.rec.replay.iter_events())
+checkpoints = session.rec.replay.checkpoints
+snapshot = session.rec.to_dict()["replay"]
+session.rec.show_replay(include_payload=True, limit=20)
+```
 
 ### Observation 验证与晋升
 
@@ -94,6 +106,7 @@
     - `verification_status`
     - `verified_by`
     - `verification_reason`
+  - 可选 `capture_replay_registry=True`，把 replay 子会话的 `rec.show(...)` 文本放进 `VerificationResult.metadata["replay_registry_lines"]`
 - `promote_observation_to_fact(...)`
   - 把 observation 显式晋升为 fact
 

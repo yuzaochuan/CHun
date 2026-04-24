@@ -102,6 +102,8 @@ session.checkpoint("before_fmt_probe")
 - 不传 checkpoint：返回 `[0:cursor]` 全量切片
 - 传 checkpoint：从该 checkpoint 的 `event_seq` 开始切片
 
+注意：`from_checkpoint` 的语义是 `[checkpoint:当前]`，不是 `[:checkpoint]`。
+
 ### `replay_from_checkpoint(checkpoint_name)`
 
 `slice_to_here(from_checkpoint=...)` 的语义化别名。
@@ -136,7 +138,8 @@ session.checkpoint("before_fmt_probe")
 - `append_event(...)`
 - `checkpoint(...)`
 - `slice_to_here(...)`
-- `replay(...)`
+- `render_replay(...)` / `show_replay(...)`
+- `run_replay(...)`
 - `validate_observation(...)`
 - `promote_observation_to_fact(...)`
 
@@ -153,6 +156,14 @@ session.checkpoint("before_fmt_probe")
    - `verification_reason`
    - `verification_output_preview`
 6. 验证通过且 `promote_to_fact=True` 时，晋升为 fact
+
+如需查看 replay 子会话内部 rec 层，可传：
+
+- `capture_replay_registry=True`
+- `replay_registry_layers=...`
+- `replay_registry_detail=...`
+
+结果会放进 `VerificationResult.metadata["replay_registry_lines"]`。
 
 ## FMT 自动验证接入
 
@@ -187,12 +198,133 @@ replay 记录的是“发送了什么 / 等待了什么”，不是“地址值�
 
 这些边界是有意为之，用于保持 replay 热路径可控。
 
-## 示例：手动验证一个候选 observation
+## 常用切片模式
+
+### 1) 从某个 checkpoint 回放到当前（`[checkpoint:now]`）
+
+```python
+trace = session.rec.slice_to_here(from_checkpoint="io_node_1")
+```
+
+### 2) 回放到某个 checkpoint 之前（`[:checkpoint]`）
+
+```python
+cp = session.rec.replay.checkpoints["io_node_1"]
+trace = tuple(event for event in session.rec.slice_to_here() if event.seq < cp.event_seq)
+```
+
+### 3) 回退一步（丢掉最后一个事件）
+
+```python
+trace = session.rec.slice_to_here()[:-1]
+```
+
+## 示例：最小手动 IO 验证（推荐）
+
+下面示例演示：
+
+- 用 replay 新开独立会话
+- 回到目标 IO 流位置
+- 发送你指定的 payload
+- 打印回包字节并做可选断言
+
+```python
+from pwn import hexdump
+from chun.core.replay import ReplayExecutor
+
+def manual_verify_io(
+    session,
+    *,
+    payload: bytes,
+    expected: bytes | None = None,
+    from_checkpoint: str | None = None,
+):
+    executor = ReplayExecutor(session.rec.replay.blob_store)
+    trace = session.rec.slice_to_here(from_checkpoint=from_checkpoint)
+
+    def predicate(out: bytes) -> bool:
+        print(f"[replay recv] len={len(out)}")
+        print(hexdump(out))
+        return True if expected is None else (expected in out)
+
+    return executor.replay(
+        trace,
+        session_factory=session.make_replay_session,
+        probe=payload,
+        predicate=predicate,
+    )
+
+# 例子：回到 io_node_1 对应链路，再发 "7"
+result = manual_verify_io(
+    s.session,
+    payload=b"7",
+    expected=None,
+    from_checkpoint="io_node_1",
+)
+print(result.ok, result.reason)
+```
+
+脚本态可以直接用语法糖（默认按“当前位置前缀”回放）：
+
+```python
+result = s.replay(
+    b"7",             # 注入 payload
+    expected=None,    # 可选：期望命中字节
+    show_recv=True,   # 可选：打印回包长度与 hexdump
+)
+print(result.ok, result.reason)
+```
+
+`show_recv=True` 会临时提升日志级别输出 `[replay recv]`，随后恢复现场，不受 `replay_silent` 的抑制影响。
+
+如果你要显式指定 checkpoint，用关键字参数：
+
+```python
+result = s.replay(b"7", checkpoint="io_node_1")
+```
+
+函数模式也支持（含多参数和 `action_kwargs`）：
+
+```python
+# 外部函数不需要改成接收 session 参数
+# def show(index): menu(3); s.sla(b"Index: ", str(index).encode())
+result = s.replay(show, 7, show_recv=True)
+
+def edit(index, size, content):
+    menu(2)
+    s.sla(b"Index: ", str(index).encode())
+    s.sla(b"Size: ", str(size).encode())
+    s.sla(b"Content: ", content)
+
+result2 = s.replay(edit, 5, 0x20, b"AAAA", show_recv=True)
+```
+
+如果你希望拿到 replay 子会话的 rec 展示文本：
+
+```python
+result = s.session.rec.run_replay(
+    session_factory=s.session.make_replay_session,
+    executor=ReplayExecutor(s.session.rec.replay.blob_store),
+    probe=b"7",
+    predicate=lambda out: True,
+    from_checkpoint="io_node_1",
+    capture_replay_registry=True,
+    replay_registry_layers=("context", "observations", "facts"),
+    replay_registry_detail="standard",
+)
+
+for line in result.metadata.get("replay_registry_lines", ()):
+    print(line)
+```
+
+## 示例：候选 observation 验证并晋升 fact（可选）
+
+如果你要走 `observation -> fact` 自动晋升流程，使用 `validate_observation(...)`：
 
 ```python
 from chun.core.replay import ReplayExecutor
 
-obs = session.rec.record_observation(
+session.rec.record_observation(
     "fmt.offset.candidate",
     6,
     source="manual",

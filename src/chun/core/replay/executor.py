@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from typing import Any
 from typing import Callable, Protocol
 
 from ..._compat import context
@@ -32,6 +33,15 @@ class ReplayExecutor:
         predicate: Callable[[bytes], bool],
         probe_dispatch: str = "sendline",
         recv_bytes: int = 4096,
+        capture_registry: bool = False,
+        registry_layers: tuple[str, ...] | str = (
+            "context",
+            "observations",
+            "facts",
+            "artifacts",
+        ),
+        registry_detail: str = "standard",
+        registry_limit: int | None = None,
     ) -> VerificationResult:
         run_id = str(uuid.uuid4())
         previous_log_level = getattr(context, "log_level", None)
@@ -55,12 +65,29 @@ class ReplayExecutor:
                 io_obj.sendline(probe)
             response = io_obj.recv(recv_bytes)
             ok = bool(predicate(response))
+            metadata: dict[str, Any] = {}
+            if capture_registry:
+                registry = getattr(session, "rec", None)
+                if registry is None:
+                    metadata["replay_registry_capture_error"] = "session.rec 不存在"
+                else:
+                    try:
+                        lines = registry.render(  # type: ignore[attr-defined]
+                            layers=registry_layers,
+                            detail=registry_detail,
+                            limit=registry_limit,
+                        )
+                    except Exception as exc:  # pragma: no cover - 防御性分支
+                        metadata["replay_registry_capture_error"] = str(exc)
+                    else:
+                        metadata["replay_registry_lines"] = tuple(lines)
             return VerificationResult(
                 run_id=run_id,
                 ok=ok,
                 reason="predicate_pass" if ok else "predicate_fail",
                 output_preview=response[:256],
                 completed_ns=time.time_ns(),
+                metadata=metadata,
             )
         finally:
             try:

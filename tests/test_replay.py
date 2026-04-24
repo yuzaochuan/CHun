@@ -156,3 +156,21 @@ def test_replay_executor_restores_pwntools_log_level() -> None:
         assert context.log_level == expected_level
     finally:
         context.log_level = old_level
+
+
+def test_replay_executor_can_capture_replay_session_registry_lines() -> None:
+    session = _build_session(probe_response=b"ok\n")
+    executor = ReplayExecutor(session.rec.replay.blob_store)
+
+    result = executor.replay(
+        tuple(),
+        session_factory=lambda: _build_session(probe_response=b"ok\n"),
+        probe=b"ping",
+        predicate=lambda out: b"ok" in out,
+        capture_registry=True,
+    )
+
+    lines = result.metadata.get("replay_registry_lines")
+    assert isinstance(lines, tuple)
+    assert lines
+    assert str(lines[0]).startswith("[Registry]")
