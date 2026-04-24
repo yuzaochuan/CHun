@@ -9,6 +9,7 @@ import pytest
 
 from chun import CHun
 from chun.core.models import FactKind, RecordDomain
+from chun.core.replay import VerificationResult
 from chun.core.registry import EvidenceRegistry
 from chun.core.models import TargetSpec
 import chun.script as script_mod
@@ -100,6 +101,7 @@ class DummySession:
     def __post_init__(self) -> None:
         self.target = type("Target", (), {"kind": self.kind})()
         self.rec = SimpleNamespace(name="rec")
+        self.fmt = SimpleNamespace(name="fmt")
         self.infer = SimpleNamespace(name="infer")
         self.resolve = SimpleNamespace(name="resolve")
         self.crash = SimpleNamespace(name="crash")
@@ -143,6 +145,8 @@ class FakeELF:
     libc: Any = None
     bits: int = 64
     bytes: int = 8
+    little_endian: bool = True
+    arch: str = "amd64"
 
 
 @pytest.fixture
@@ -192,7 +196,7 @@ def test_script_initializes_target_and_runtime_defaults(
     else:
         assert getattr(tls, "binary", None) is entry.elf or script_mod.context.binary is entry.elf
     assert script_mod.context.log_level in ("debug", 10)
-    assert script_mod.context.terminal == ["tmux", "splitw", "-h", "-d"]
+    assert script_mod.context.terminal == ["tmux", "splitw", "-h"]
     assert fake_pwntools_env["loaded"] == [("./challenge", False)]
 
 
@@ -239,7 +243,7 @@ def test_script_start_uses_process_by_default(
     assert calls[0]["target"].cwd == "/tmp/challenge"
     assert calls[0]["target"].metadata == {
         "log_level": "debug",
-        "terminal": ["tmux", "splitw", "-h", "-d"],
+        "terminal": ["tmux", "splitw", "-h"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout is None
@@ -288,7 +292,7 @@ def test_script_start_uses_remote_when_remote_flag_is_set(
     assert calls[0]["target"].libc == "./libc.so.6"
     assert calls[0]["target"].metadata == {
         "log_level": "info",
-        "terminal": ["tmux", "splitw", "-h", "-d"],
+        "terminal": ["tmux", "splitw", "-h"],
     }
     assert calls[0]["transport"].kind == "pwntools-tube"
     assert calls[0]["transport"].timeout == 1.5
@@ -416,6 +420,480 @@ def test_script_debug_falls_back_to_start_when_gdb_flag_is_off(
 
     assert entry.debug("b *main") is entry
     assert entry.session is session
+
+
+def test_script_fmt_facade_forwards_to_session_and_enables_loginfo_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[dict[str, Any]] = []
+
+    def fake_find_offset(**kwargs: Any) -> str:
+        calls.append(kwargs)
+        return "offset"
+
+    session.fmt = SimpleNamespace(find_offset=fake_find_offset, marker="fmt-service")
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.fmt.marker == "fmt-service"
+    assert entry.fmt.find_offset(max_slots=8) == "offset"
+    assert calls == [{"max_slots": 8, "loginfo": True}]
+
+
+def test_script_fmt_facade_respects_explicit_loginfo_override(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[dict[str, Any]] = []
+
+    def fake_find_offset(**kwargs: Any) -> str:
+        calls.append(kwargs)
+        return "offset"
+
+    session.fmt = SimpleNamespace(find_offset=fake_find_offset)
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.fmt.find_offset(loginfo=False) == "offset"
+    assert calls == [{"loginfo": False}]
+
+
+def test_script_fmt_facade_enables_compare_write_loginfo_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[dict[str, Any]] = []
+
+    def fake_compare_write(*args: Any, **kwargs: Any) -> str:
+        calls.append({"args": args, "kwargs": kwargs})
+        return "comparison"
+
+    session.fmt = SimpleNamespace(compare_write=fake_compare_write)
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.fmt.compare_write(0x6010A0, 0x601018) == "comparison"
+    assert calls == [
+        {
+            "args": (0x6010A0, 0x601018),
+            "kwargs": {
+                "strategies": (
+                    script_mod.FmtWriteStrategy.AUTO,
+                    script_mod.FmtWriteStrategy.BYTE,
+                    script_mod.FmtWriteStrategy.SHORT,
+                    script_mod.FmtWriteStrategy.INT,
+                ),
+                "offset": None,
+                "task_policy": script_mod.FmtTaskPolicy.PACKED,
+                "data_offset": None,
+                "buflen": None,
+                "end": b"\n",
+                "show_hex": False,
+                "loginfo": True,
+            },
+        }
+    ]
+
+
+def test_script_fmt_write_builder_reuses_arguments_for_info_and_send(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    compare_calls: list[dict[str, Any]] = []
+    plan_calls: list[dict[str, Any]] = []
+    execute_calls: list[dict[str, Any]] = []
+    recvuntil_calls: list[tuple[bytes, bool]] = []
+    plan = object()
+
+    def fake_compare_write(*args: Any, **kwargs: Any) -> str:
+        compare_calls.append({"args": args, "kwargs": kwargs})
+        return "info"
+
+    def fake_plan_write(*args: Any, **kwargs: Any) -> object:
+        plan_calls.append({"args": args, "kwargs": kwargs})
+        return plan
+
+    def fake_render_plan(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        return (
+            SimpleNamespace(
+                payload=b"A" * 16,
+                steps=(SimpleNamespace(padding=0),),
+            ),
+        )
+
+    def fake_execute_plan(*args: Any, **kwargs: Any) -> str:
+        execute_calls.append({"args": args, "kwargs": kwargs})
+        return "sent"
+
+    fake_io = SimpleNamespace(
+        recvuntil=lambda delim, drop=False: recvuntil_calls.append((delim, drop)) or delim
+    )
+    session.fmt = SimpleNamespace(
+        compare_write=fake_compare_write,
+        plan_write=fake_plan_write,
+        render_plan=fake_render_plan,
+        execute_plan=fake_execute_plan,
+        session=SimpleNamespace(io=fake_io),
+    )
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    action = entry.fmt.write(
+        0x6010A0,
+        0x601018,
+        b"name: ",
+        6,
+        strategy="byte",
+        task_policy="by_atom",
+        end=b" ",
+    )
+
+    assert action.info(48, show_hex=True) == "info"
+    assert action.send(48, show_hex=True) == "sent"
+    assert compare_calls == [
+        {
+            "args": (0x6010A0, 0x601018),
+            "kwargs": {
+                "strategies": (
+                    script_mod.FmtWriteStrategy.AUTO,
+                    script_mod.FmtWriteStrategy.BYTE,
+                    script_mod.FmtWriteStrategy.SHORT,
+                    script_mod.FmtWriteStrategy.INT,
+                ),
+                "offset": 6,
+                "task_policy": script_mod.FmtTaskPolicy.BY_ATOM,
+                "data_offset": None,
+                "buflen": 48,
+                "end": b" ",
+                "show_hex": True,
+                "loginfo": False,
+            },
+        }
+    ]
+    assert recvuntil_calls == [(b"name: ", False)]
+    assert plan_calls == [
+        {
+            "args": (0x6010A0, 0x601018),
+            "kwargs": {
+                "strategy": script_mod.FmtWriteStrategy.BYTE,
+                "offset": 6,
+                "task_policy": script_mod.FmtTaskPolicy.BY_ATOM,
+                "data_offset": None,
+            },
+        }
+    ]
+    assert execute_calls == [
+        {
+            "args": (plan,),
+            "kwargs": {
+                "offset": 6,
+                "data_offset": None,
+                "receive": False,
+                "end": b" ",
+            },
+        }
+    ]
+
+
+def test_script_fmt_facade_enables_compare_writes_loginfo_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[dict[str, Any]] = []
+
+    def fake_compare_writes(*args: Any, **kwargs: Any) -> str:
+        calls.append({"args": args, "kwargs": kwargs})
+        return "comparison"
+
+    session.fmt = SimpleNamespace(compare_writes=fake_compare_writes)
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    writes = {0x6010A0: 0x601018, 0x6010B0: 0x601028}
+    assert entry.fmt.compare_writes(writes) == "comparison"
+    assert calls == [
+        {
+            "args": (writes,),
+            "kwargs": {
+                "strategies": (
+                    script_mod.FmtWriteStrategy.AUTO,
+                    script_mod.FmtWriteStrategy.BYTE,
+                    script_mod.FmtWriteStrategy.SHORT,
+                    script_mod.FmtWriteStrategy.INT,
+                ),
+                "offset": None,
+                "task_policy": script_mod.FmtTaskPolicy.PACKED,
+                "data_offset": None,
+                "buflen": None,
+                "end": b"\n",
+                "show_hex": False,
+                "loginfo": True,
+            },
+        }
+    ]
+
+
+def test_script_fmt_writes_builder_reuses_arguments_for_info_and_send(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    compare_calls: list[dict[str, Any]] = []
+    plan_calls: list[dict[str, Any]] = []
+    execute_calls: list[dict[str, Any]] = []
+    recvuntil_calls: list[tuple[bytes, bool]] = []
+    plan = object()
+
+    def fake_compare_writes(*args: Any, **kwargs: Any) -> str:
+        compare_calls.append({"args": args, "kwargs": kwargs})
+        return "info"
+
+    def fake_plan_writes(*args: Any, **kwargs: Any) -> object:
+        plan_calls.append({"args": args, "kwargs": kwargs})
+        return plan
+
+    def fake_render_plan(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        return (
+            SimpleNamespace(
+                payload=b"A" * 16,
+                steps=(SimpleNamespace(padding=0),),
+            ),
+        )
+
+    def fake_execute_plan(*args: Any, **kwargs: Any) -> str:
+        execute_calls.append({"args": args, "kwargs": kwargs})
+        return "sent"
+
+    fake_io = SimpleNamespace(
+        recvuntil=lambda delim, drop=False: recvuntil_calls.append((delim, drop)) or delim
+    )
+    session.fmt = SimpleNamespace(
+        compare_writes=fake_compare_writes,
+        plan_writes=fake_plan_writes,
+        render_plan=fake_render_plan,
+        execute_plan=fake_execute_plan,
+        session=SimpleNamespace(io=fake_io),
+    )
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    writes = {0x6010A0: 0x601018, 0x6010B0: 0x601028}
+    action = entry.fmt.writes(
+        writes,
+        b"choice> ",
+        6,
+        strategy="short",
+        task_policy="by_target",
+        end=b" ",
+    )
+
+    assert action.info(96, show_hex=True) == "info"
+    assert action.send(96, show_hex=True) == "sent"
+    assert compare_calls == [
+        {
+            "args": (writes,),
+            "kwargs": {
+                "strategies": (
+                    script_mod.FmtWriteStrategy.AUTO,
+                    script_mod.FmtWriteStrategy.BYTE,
+                    script_mod.FmtWriteStrategy.SHORT,
+                    script_mod.FmtWriteStrategy.INT,
+                ),
+                "offset": 6,
+                "task_policy": script_mod.FmtTaskPolicy.BY_TARGET,
+                "data_offset": None,
+                "buflen": 96,
+                "end": b" ",
+                "show_hex": True,
+                "loginfo": True,
+            },
+        }
+    ]
+    assert recvuntil_calls == [(b"choice> ", False)]
+    assert plan_calls == [
+        {
+            "args": (writes,),
+            "kwargs": {
+                "strategy": script_mod.FmtWriteStrategy.SHORT,
+                "offset": 6,
+                "task_policy": script_mod.FmtTaskPolicy.BY_TARGET,
+                "data_offset": None,
+            },
+        }
+    ]
+    assert execute_calls == [
+        {
+            "args": (plan,),
+            "kwargs": {
+                "offset": 6,
+                "data_offset": None,
+                "receive": False,
+                "end": b" ",
+            },
+        }
+    ]
+
+
+def test_script_fmt_send_logs_error_when_send_len_exceeds_buflen(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    errors: list[str] = []
+    plan = SimpleNamespace(offset=6)
+
+    def fake_plan_write(*args: Any, **kwargs: Any) -> object:
+        return plan
+
+    def fake_render_plan(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        return (
+            SimpleNamespace(
+                payload=b"A" * 32,
+                steps=(SimpleNamespace(padding=0),),
+            ),
+        )
+
+    def fake_execute_plan(*args: Any, **kwargs: Any) -> str:
+        return "sent"
+
+    session.fmt = SimpleNamespace(
+        plan_write=fake_plan_write,
+        render_plan=fake_render_plan,
+        execute_plan=fake_execute_plan,
+        session=SimpleNamespace(io=SimpleNamespace(recvuntil=lambda *_args, **_kwargs: b"")),
+    )
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+    monkeypatch.setattr(script_mod.log, "error", errors.append)
+
+    entry = CHun.script("./challenge").start()
+    assert entry.fmt.write(0x6010A0, 0x601018).send(16) == "sent"
+    assert errors == ["fmt 发送长度 33B 超过 buflen=16B，仍继续发送。"]
+
+
+def test_script_fmt_send_logs_warning_for_high_pad_time(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    warnings: list[str] = []
+    plan = SimpleNamespace(offset=6)
+
+    def fake_plan_write(*args: Any, **kwargs: Any) -> object:
+        return plan
+
+    def fake_render_plan(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        return (
+            SimpleNamespace(
+                payload=b"A" * 8,
+                steps=(SimpleNamespace(padding=0x1000),),
+            ),
+        )
+
+    def fake_execute_plan(*args: Any, **kwargs: Any) -> str:
+        return "sent"
+
+    session.fmt = SimpleNamespace(
+        plan_write=fake_plan_write,
+        render_plan=fake_render_plan,
+        execute_plan=fake_execute_plan,
+        session=SimpleNamespace(io=SimpleNamespace(recvuntil=lambda *_args, **_kwargs: b"")),
+    )
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    assert entry.fmt.write(0x6010A0, 0x601018).send() == "sent"
+    assert warnings == ["fmt 的 pad_time 为 HIGH（max_pad=4096），服务端可能变慢或超时。"]
 
 
 def test_script_gdb_warns_for_remote_session(
@@ -679,6 +1157,198 @@ def test_script_explicit_io_methods_and_aliases_forward_to_io(
     ]
 
 
+def test_script_replay_sugar_uses_prefix_before_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    captured: dict[str, Any] = {}
+
+    checkpoint_entry = SimpleNamespace(event_seq=42)
+
+    class _RecStub:
+        replay = SimpleNamespace(
+            checkpoints={"io_node_1": checkpoint_entry},
+            blob_store=object(),
+            cursor_seq=99,
+        )
+
+        def run_replay(self, **kwargs: Any) -> VerificationResult:
+            captured.update(kwargs)
+            old_level = script_mod.context.log_level
+            try:
+                script_mod.context.log_level = "error"
+                expected_error_level = script_mod.context.log_level
+                assert kwargs["predicate"](b"xxokyy") is True
+                assert script_mod.context.log_level == expected_error_level
+            finally:
+                script_mod.context.log_level = old_level
+            return VerificationResult(
+                run_id="run-id",
+                ok=True,
+                reason="predicate_pass",
+            )
+
+    session.rec = _RecStub()
+    session.make_replay_session = lambda: object()  # type: ignore[attr-defined]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    messages: list[str] = []
+    monkeypatch.setattr(script_mod.log, "info", messages.append)
+
+    entry = CHun.script("./challenge").start()
+    result = entry.replay(
+        b"7",
+        checkpoint="io_node_1",
+        expected=b"ok",
+        show_recv=True,
+        capture_replay_registry=True,
+    )
+
+    assert result.ok is True
+    assert captured["probe"] == b"7"
+    assert captured["end_seq_exclusive"] == 42
+    assert captured["capture_replay_registry"] is True
+    assert captured["session_factory"] is session.make_replay_session
+    assert any(line.startswith("[replay recv] len=") for line in messages)
+    assert any("00000000" in line for line in messages)
+
+
+def test_script_replay_sugar_defaults_to_current_position(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    captured: dict[str, Any] = {}
+
+    class _RecStub:
+        replay = SimpleNamespace(
+            checkpoints={},
+            blob_store=object(),
+            cursor_seq=73,
+        )
+
+        def run_replay(self, **kwargs: Any) -> VerificationResult:
+            captured.update(kwargs)
+            assert kwargs["predicate"](b"anything") is True
+            return VerificationResult(
+                run_id="run-id",
+                ok=True,
+                reason="predicate_pass",
+            )
+
+    session.rec = _RecStub()
+    session.make_replay_session = lambda: object()  # type: ignore[attr-defined]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    result = entry.replay(b"7")
+
+    assert result.ok is True
+    assert captured["probe"] == b"7"
+    assert captured["end_seq_exclusive"] == 73
+
+
+def test_script_replay_sugar_supports_callable_with_multi_args_and_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    replay_session = DummySession(kind="process")
+    replay_session.rec = EvidenceRegistry()
+    registry = EvidenceRegistry()
+    registry.append_event("sendline", payload=b"warmup\n")
+    session.rec = registry
+    session.make_replay_session = lambda: replay_session  # type: ignore[attr-defined]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    def _menu(choice: int) -> None:
+        s.sla(b"> ", str(choice).encode())
+
+    def _show(index: int, suffix: bytes, *, with_menu: bool = True) -> None:
+        if with_menu:
+            _menu(3)
+        s.sla(b"Index: ", str(index).encode() + suffix)
+
+    marker = object()
+    had_global_s = "s" in globals()
+    old_global_s = globals().get("s", marker)
+    globals()["s"] = marker
+    try:
+        entry = CHun.script("./challenge").start()
+        result = entry.replay(
+            _show,
+            7,
+            b"!",
+            action_kwargs={"with_menu": True},
+            expected=b"recv",
+            show_recv=True,
+        )
+    finally:
+        if had_global_s:
+            globals()["s"] = old_global_s
+        else:
+            globals().pop("s", None)
+
+    assert result.ok is True
+    assert result.reason == "predicate_pass"
+    assert session.io.calls == []
+    assert replay_session.io.calls == [
+        ("sendline", (b"warmup\n",), {}),
+        ("sendlineafter", (b"> ", b"3"), {}),
+        ("sendlineafter", (b"Index: ", b"7!"), {}),
+        ("recv", (4096,), {}),
+    ]
+
+
+def test_script_replay_sugar_raises_for_missing_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = SimpleNamespace(
+        replay=SimpleNamespace(checkpoints={}, blob_store=object(), cursor_seq=0),
+    )
+    session.make_replay_session = lambda: object()  # type: ignore[attr-defined]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    with pytest.raises(KeyError, match="replay checkpoint 不存在：io_node_1"):
+        entry.replay(b"7", checkpoint="io_node_1")
+
+
 def test_script_recv_leak_reads_raw_bytes_and_records_symbol_leak(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
@@ -750,6 +1420,163 @@ def test_script_recv_leak_reads_hex_and_applies_offset(
         ("recvuntil", ("puts: ",), {"drop": False}),
         ("recvline", (), {"keepends": False}),
     ]
+
+
+def test_script_recv_leak_extracts_first_hex_token_from_dirty_line(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvline_values = [b"0x7f1234580aa0 saved-rbp=0x7ffe3748e060\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    warnings: list[str] = []
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("puts", delim="puts: ", mode="hex")
+
+    assert value == 0x7F1234580AA0
+    assert warnings == [
+        "共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060|默认选 0x7f1234580aa0"
+    ]
+    assert session.io.calls == [
+        ("recvuntil", ("puts: ",), {"drop": False}),
+        ("recvline", (), {"keepends": False}),
+    ]
+
+
+def test_script_recv_leak_supports_hex_index_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvline_values = [b"0x7f1234580aa0 0x7ffe3748e060\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    warnings: list[str] = []
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("saved_rbp", delim="puts: ", mode="hex", index=1)
+
+    assert value == 0x7FFE3748E060
+    assert warnings == [
+        "共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060|默认选 0x7ffe3748e060"
+    ]
+
+
+def test_script_recv_leak_supports_hex_delim_end_window(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+
+    def fake_recvuntil(delim: bytes, drop: bool = False) -> bytes:
+        session.io.calls.append(("recvuntil", (delim,), {"drop": drop}))
+        if delim == b"Hello,":
+            return b"Hello,"
+        if delim == b" world":
+            return b"0x7f1234580aa0 and 0x7ffe3748e060 world"
+        return b"until"
+
+    session.io.recvuntil = fake_recvuntil
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    warnings: list[str] = []
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak(
+        "saved_rbp",
+        b"Hello,",
+        mode="hex",
+        delim_end=b" world",
+        index=1,
+    )
+
+    assert value == 0x7FFE3748E060
+    assert warnings == [
+        "共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060|默认选 0x7ffe3748e060"
+    ]
+    assert session.io.calls == [
+        ("recvuntil", (b"Hello,",), {"drop": False}),
+        ("recvuntil", (b" world",), {"drop": True}),
+    ]
+
+
+def test_script_recv_leak_rejects_out_of_range_hex_index(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvline_values = [b"0x7f1234580aa0 0x7ffe3748e060\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(
+        ValueError,
+        match=r"共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060，index=2 越界。",
+    ):
+        entry.recv_leak("puts", mode="hex", index=2)
+
+
+def test_script_recv_leak_rejects_delim_end_with_regex(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(ValueError, match="delim_end 和 regex 不能同时提供。"):
+        entry.recv_leak("puts", delim_end=b"!", regex=rb"(0x[0-9a-f]+)", mode="hex")
 
 
 def test_script_recv_leak_reads_regex_capture_and_allows_custom_domain(

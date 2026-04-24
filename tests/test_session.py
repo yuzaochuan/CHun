@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from chun import CHun, CHunSession
 from chun.core.inference import InferenceService
-from chun.core.models import FactKind, RecordDomain, TargetSpec, TransportSpec
+from chun.core.models import ContextKind, FactKind, RecordDomain, TargetSpec, TransportSpec
 from chun.core.registry import EvidenceRegistry
 from chun.transports import (
     BlindReconnectTransport,
@@ -89,8 +90,75 @@ def test_session_exposes_registry_alias_and_seeded_context() -> None:
     session = CHun.remote("example.com", 31337)
 
     assert session.rec is session.registry
+    assert session.fmt is not None
     assert session.registry.get_context("session.target.kind") is not None
     assert session.registry.get_context("session.transport.kind") is not None
+
+
+def test_session_bind_binaries_syncs_arch_and_binary_context() -> None:
+    session = CHunSession(
+        target=TargetSpec(kind="process"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyTransport(),
+    )
+    elf = SimpleNamespace(
+        path="./challenge",
+        bits=32,
+        little_endian=True,
+        arch="i386",
+    )
+    libc_elf = SimpleNamespace(path="./libc.so.6")
+
+    session.bind_binaries(elf=elf, libc_elf=libc_elf, source="script")
+
+    assert session.elf is elf
+    assert session.libc_elf is libc_elf
+    assert session.rec.get_context("binary.path").value == "./challenge"
+    assert session.rec.get_context("binary.arch").value == "i386"
+    assert session.rec.get_context("binary.bits").value == 32
+    assert session.rec.get_context("libc.path").value == "./libc.so.6"
+    assert session.rec.get_context("arch.bits").value == 32
+    assert session.rec.get_context("arch.pointer_size").value == 4
+    assert session.rec.get_context("arch.endian").value == "little"
+    assert session.rec.get_context("arch.bits").kind == ContextKind.ENVIRONMENT
+
+
+def test_session_bind_binaries_is_partial_safe() -> None:
+    session = CHunSession(
+        target=TargetSpec(kind="process"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyTransport(),
+    )
+    elf = SimpleNamespace(path="./challenge", bits=64, little_endian=True, arch="amd64")
+    libc_elf = SimpleNamespace(path="./libc.so.6", bits=64, arch="amd64")
+
+    session.bind_binaries(elf=elf, source="script")
+    session.bind_binaries(libc_elf=libc_elf, source="script")
+
+    assert session.elf is elf
+    assert session.libc_elf is libc_elf
+    assert session.rec.get_context("binary.path").value == "./challenge"
+    assert session.rec.get_context("libc.path").value == "./libc.so.6"
+
+
+def test_session_bind_binaries_is_idempotent() -> None:
+    session = CHunSession(
+        target=TargetSpec(kind="process"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyTransport(),
+    )
+    elf = SimpleNamespace(path="./challenge", bits=64, little_endian=True, arch="amd64")
+
+    session.bind_binaries(elf=elf, source="script")
+    first_bits = session.rec.get_context("arch.bits")
+    first_path = session.rec.get_context("binary.path")
+    session.bind_binaries(elf=elf, source="script")
+
+    assert session.elf is elf
+    assert session.rec.get_context("arch.bits").value == 64
+    assert session.rec.get_context("binary.path").value == "./challenge"
+    assert first_bits is not None
+    assert first_path is not None
 
 
 def test_session_minimal_inference_loop_writes_fact_back_to_registry() -> None:

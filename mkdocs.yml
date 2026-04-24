@@ -26,6 +26,9 @@ nav:
   - API:
       - 总览: api/index.md
       - Session: api/tool.md
+      - Replay: api/replay.md
+      - FMT: api/fmt.md
+      - Workflow: api/workflow.md
       - Debug & Resolve: api/debug.md
       - Transport: api/transport.md
       - Registry: api/registry.md

@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .core.models import AnalysisNode, CallNode, ExprNode, LiteralNode, NameRefNode, OpaqueCallNode, WorkflowTranscript
+from .core.workflow import ExploitWorkflowCompiler, WorkflowExecutor, WorkflowJsonCodec
 
-DESCRIPTION = "CHun 命令行工具：查看当前工作区与环境状态。"
+
+DESCRIPTION = "CHun 命令行工具。"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -16,6 +19,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     info_parser = subparsers.add_parser("info", help="查看包和工作区信息")
     info_parser.add_argument("--cwd", default=".", help="要检查的工作目录")
+
+    workflow_parser = subparsers.add_parser("workflow", help="导出、查看和执行 workflow")
+    workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command", required=True)
+
+    export_parser = workflow_subparsers.add_parser("export", help="把 exp 脚本导出成 action IR 与 workflow transcript")
+    export_parser.add_argument("exp_path", help="要编译的 exploit 脚本路径")
+    export_parser.add_argument("--entry", help="指定单个入口 action；默认导出整份模块 transcript")
+    export_parser.add_argument("--out-dir", help="导出目录；默认落到 exp 同目录")
+
+    show_parser = workflow_subparsers.add_parser("show", help="查看 exp 脚本的 workflow 摘要")
+    show_parser.add_argument("exp_path", help="要分析的 exploit 脚本路径")
+    show_parser.add_argument("--entry", help="指定单个入口 action；默认按整份模块摘要展示")
+
+    run_parser = workflow_subparsers.add_parser("run", help="执行已导出的 workflow transcript")
+    run_parser.add_argument("workflow_path", help="workflow transcript JSON 文件路径")
 
     return parser
 
@@ -28,6 +46,136 @@ def cmd_info(cwd: str) -> int:
     return 0
 
 
+def cmd_workflow_export(exp_path: str, *, entry: str | None = None, out_dir: str | None = None) -> int:
+    compiler = ExploitWorkflowCompiler()
+    source_path = Path(exp_path).resolve()
+    module_name = source_path.stem
+    ir = compiler.compile_path(source_path, module_name=module_name)
+    entry_action = _normalize_entry(entry, module_name=module_name)
+    transcript = (
+        compiler.build_transcript(ir, entry_action)
+        if entry_action is not None
+        else compiler.build_module_transcript(ir)
+    )
+    action_ir_path, workflow_path = _resolve_export_paths(source_path, out_dir=out_dir)
+    WorkflowJsonCodec.dump_action_ir(ir, action_ir_path)
+    WorkflowJsonCodec.dump_transcript(transcript, workflow_path)
+    print(f"action_ir: {action_ir_path}")
+    print(f"workflow: {workflow_path}")
+    print(f"entry_action: {transcript.entry_action}")
+    print(f"primitive_count: {len(transcript.primitives)}")
+    _print_workflow_payload_warnings(transcript)
+    return 0
+
+
+def cmd_workflow_show(exp_path: str, *, entry: str | None = None) -> int:
+    compiler = ExploitWorkflowCompiler()
+    source_path = Path(exp_path).resolve()
+    module_name = source_path.stem
+    ir = compiler.compile_path(source_path, module_name=module_name)
+    entry_action = _normalize_entry(entry, module_name=module_name)
+    transcript = (
+        compiler.build_transcript(ir, entry_action)
+        if entry_action is not None
+        else compiler.build_module_transcript(ir)
+    )
+    print(f"source: {source_path}")
+    print(f"module: {ir.module_name}")
+    print(f"functions: {len(ir.functions)}")
+    print(f"top_level_blocks: {len(ir.top_level_blocks)}")
+    print(f"entrypoints: {', '.join(ir.entrypoints)}")
+    print(f"transcript_entry: {transcript.entry_action}")
+    print(f"primitive_count: {len(transcript.primitives)}")
+    _print_workflow_payload_warnings(transcript)
+    return 0
+
+
+def cmd_workflow_run(workflow_path: str) -> int:
+    transcript = WorkflowJsonCodec.load_transcript(workflow_path)
+    executor = WorkflowExecutor()
+    captured_session: dict[str, object] = {}
+
+    def _capture_session(session: object, _result: object) -> None:
+        captured_session["session"] = session
+
+    result = executor.execute(transcript, on_complete=_capture_session)
+    print(f"entry_action: {result.transcript.entry_action}")
+    print(f"total_steps: {result.total_steps}")
+    if result.final_checkpoint is not None:
+        print(f"final_checkpoint: {result.final_checkpoint.name}")
+    else:
+        print("final_checkpoint: <none>")
+    session = captured_session.get("session")
+    if session is not None:
+        session.rec.show(layers=("context", "facts"), detail="standard", emit="info")
+    return 0
+
+
+def _resolve_export_paths(exp_path: Path, *, out_dir: str | None = None) -> tuple[Path, Path]:
+    base_dir = Path(out_dir).resolve() if out_dir is not None else exp_path.parent
+    stem = exp_path.stem
+    return (
+        base_dir / f"{stem}.action_ir.json",
+        base_dir / f"{stem}.workflow.json",
+    )
+
+
+def _normalize_entry(entry: str | None, *, module_name: str) -> str | None:
+    if entry is None:
+        return None
+    if "." in entry:
+        return entry
+    return f"{module_name}.{entry}"
+
+
+def _unresolved_payload_preview(payload: object) -> str | None:
+    source_text = getattr(payload, "metadata", {}).get("source_text")
+    if isinstance(source_text, str) and source_text:
+        return source_text
+    if isinstance(payload, LiteralNode) and payload.value_type == "expr_source":
+        return str(payload.value)
+    callee = getattr(payload, "callee", None)
+    if isinstance(callee, str) and callee:
+        return callee
+    return None
+
+
+def _find_unresolved_payloads(transcript: WorkflowTranscript) -> list[tuple[int, str, str]]:
+    unresolved: list[tuple[int, str, str]] = []
+    for index, primitive in enumerate(transcript.primitives):
+        if primitive.kind not in {"session_init", "send", "sendline", "expect", "assign", "call"}:
+            continue
+        payload = primitive.payload
+        if _workflow_payload_supported(payload):
+            continue
+        preview = _unresolved_payload_preview(payload) or type(payload).__name__
+        unresolved.append((index, primitive.kind, preview))
+    return unresolved
+
+
+def _workflow_payload_supported(payload: object) -> bool:
+    if isinstance(payload, (bytes, bytearray, str, int, float, bool, type(None))):
+        return True
+    if isinstance(payload, LiteralNode):
+        return True
+    if isinstance(payload, NameRefNode):
+        return True
+    if isinstance(payload, ExprNode):
+        return payload.evaluated or bool(payload.metadata.get("source_text"))
+    if isinstance(payload, (AnalysisNode, OpaqueCallNode, CallNode)):
+        return bool(payload.metadata.get("source_text"))
+    return False
+
+
+def _print_workflow_payload_warnings(transcript: WorkflowTranscript) -> None:
+    unresolved = _find_unresolved_payloads(transcript)
+    if not unresolved:
+        return
+    print(f"warning: found {len(unresolved)} unresolved workflow payload(s); replay may fail")
+    for index, kind, preview in unresolved[:5]:
+        print(f"  - step {index} [{kind}]: {preview}")
+
+
 def main(argv: list[str] | None = None) -> int:
     """运行 CLI 并返回退出码。"""
     parser = build_parser()
@@ -35,6 +183,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "info":
         return cmd_info(args.cwd)
+    if args.command == "workflow":
+        if args.workflow_command == "export":
+            return cmd_workflow_export(args.exp_path, entry=args.entry, out_dir=args.out_dir)
+        if args.workflow_command == "show":
+            return cmd_workflow_show(args.exp_path, entry=args.entry)
+        if args.workflow_command == "run":
+            return cmd_workflow_run(args.workflow_path)
 
     parser.error(f"未知命令: {args.command}")
     return 2

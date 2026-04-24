@@ -9,6 +9,7 @@
 - `Transport`：真正负责生命周期与 IO
 - `CHunSession`：最小可用 runtime 入口
 - `Libc Catalog`：独立于 registry 的 sqlite 知识库边界
+- `Workflow / Action IR`：高层 exploit 编排前的静态结构层
 
 ## 为什么先重建 Transport 层
 
@@ -26,9 +27,30 @@
 - `src/chun/core/models`
   - `TargetSpec`
   - `TransportSpec`
+  - `FmtTargetRef`
+  - `FmtValueRef`
+  - `FmtOffset`
+  - `FmtOffsetProbeMode`
+  - `FmtOffsetProbeResult`
+  - `FmtExecutionMethod`
+  - `FmtExecutionReceipt`
+  - `FmtLeak`
+  - `FmtWriteRequest`
+  - `FmtWriteAtom`
+  - `FmtWriteTask`
+  - `FmtWritePlan`
   - `LibcLeakConstraint`
   - `LibcCandidate`
   - `LibcSearchResult`
+  - `ImportModel`
+  - `FunctionActionDef`
+  - `TopLevelBlockDef`
+  - `ExpActionIR`
+  - `WorkflowCheckpoint`
+  - `WorkflowPrimitive`
+  - `WorkflowTranscript`
+  - `WorkflowStepReceipt`
+  - `WorkflowExecutionResult`
 - `src/chun/core/catalog`
   - `schema.sql`
   - `repository.py`
@@ -44,6 +66,12 @@
   - `build_transport()`
 - `src/chun/facade.py`
   - `CHun.process()/remote()/ssh_process()/http()/websocket()/blind()`
+- `src/chun/core/workflow`
+  - `compiler.py`
+  - `translators.py`
+  - `runtime.py`
+  - `launchers.py`
+  - `executor.py`
 
 ## Libc Catalog 的边界
 
@@ -58,7 +86,7 @@
 
 - `catalog/service.py` 负责服务层归一化与 façade，不泄漏 SQL 到 inference / resolve
 - `InferenceService` 负责调度“泄漏 -> catalog 检索 -> artifact/fact 回写”，并在版本被确认后自动补齐 `libc.base`
-- `ResolveService` 负责消费 `libc.base + libc.version` 并换算绝对地址
+- `ResolveService` 负责消费 `libc.base`，并以 mix 模式优先结合已绑定的 `libc_elf`；仅在本地 `libc_elf` 不可用或缺符号时才回退到 `libc.version + catalog`
 
 ## Libc Catalog 构建策略
 
@@ -74,7 +102,7 @@
 
 ## 第二阶段目标
 
-第二阶段把新的事实层正式挂回 `CHunSession`，让后续 fmt / heap / debugger / template 都围绕统一 registry 工作，而不是继续依赖分散记录。
+第二阶段把新的事实层正式挂回 `CHunSession`，让后续 fmt / heap / debugger / template / workflow 都围绕统一 registry 工作，而不是继续依赖分散记录。
 
 这次落地的核心边界是：
 
@@ -100,9 +128,102 @@
 - `session.gdb_mi`
 - `session.resolve`
 - `session.crash`
+- `session.fmt`
 - `session.libc_catalog`
 
 本轮收口后，面向后续插件开发的公开入口已经固定在这组字段上；下一阶段应优先复用这些入口，而不是继续新增临时 facade。
+
+## Workflow / Action IR 子系统现状
+
+workflow 现在已经拆成“编译期结构层 + 执行期 runtime”。
+
+当前已经明确分成两步：
+
+1. `exp -> action IR`
+   - 按 `def` 边界把 exploit 文件切成 import、top-level block、function def
+   - 在块体内保留调用边、赋值依赖与 IO primitive
+2. `action IR -> workflow transcript`
+   - 只在需要 replay 时，按入口把 action IR 展开成底层 primitive 序列
+3. `workflow transcript -> runtime/executor`
+   - 由执行期 runtime 真正消费 transcript，并写回 registry
+
+当前编译期实现里的关键约束是：
+
+- 只有当前模块内定义的 `def` 会成为 `FunctionActionDef`
+- 顶层定义之间的可执行语句会成为 `TopLevelBlockDef`
+- 外部调用必须经过 translator registry 分类
+- 递归展开只对当前模块 ActionDef 和已注册 macro 生效
+
+执行期第一版则只落本地 process replay backend：
+
+- `ProcessLauncher`
+- `ProcessWorkflowRuntime`
+- `WorkflowExecutor`
+- `WorkflowJsonCodec`
+
+第一版 primitive 集合也故意收窄，只支持：
+
+- `session_init`
+- `send`
+- `sendline`
+- `expect`
+- `recv`
+- `checkpoint`
+
+这样做的目的不是做一个通用 Python 静态分析器，而是稳定保留 exploit 脚本里的：
+
+- 块边界
+- 调用关系
+- IO 原语
+- replay 必需的最小 primitive transcript
+
+workflow 仍然没有挂进 `session`，因为它处理的是 exploit 源码和高层 replay，而不是单个 runtime session 的生命周期；后续 `fmt/heap/blind` 只应消费 workflow 能力，不应反向依赖 workflow 细节。
+
+本轮之后，workflow 还额外固定了一个 CLI 导出/执行约定：
+
+- `chun workflow export ./exp.py`
+  - 默认生成 `./exp.action_ir.json` 和 `./exp.workflow.json`
+- `chun workflow run ./exp.workflow.json`
+  - 直接读取 transcript 并在新的本地 process session 里执行
+
+这意味着 workflow 现在已经不只是内存里的编译器，而是具备了：
+
+- Action IR 持久化
+- transcript 持久化
+- transcript 重放执行
+
+但它依然不是完整 replay engine；当前只稳定支持本地 process backend，不承担 blind/remote 条件分支或重试策略。
+
+## Fmt 子系统现状
+
+`fmt` 现在已经按“CHun 语义层 + payload backend”收口：
+
+- probe：负责 offset 探测，并把原始响应 / probe artifact / 最终 fact 分层入库
+- planner：负责规范化 request、选择 backend、生成 CHun 的 `FmtWritePlan`
+- renderer：负责把 backend 结果包装成 `RenderedFmtTask`
+- executor：负责按 transport 能力把 rendered payload 分发出去，并产出 `FmtExecutionReceipt`
+
+其中写路径默认 backend 是 pwntools `pwnlib.fmtstr`：
+
+- atom 生成 / 合并 / 排序
+- `fmt` / `data` 拆分
+- `badbytes` / `overflows` / `no_dollars` 等约束
+
+继续由 CHun 自己保留的部分是：
+
+- typed models
+- registry/artifact/observation/fact 回写
+- blind / reconnect transport dispatch
+- `write()` / `writes()` / `execute_plan()` façade
+
+另外，write path 现在显式区分：
+
+- `offset`
+  - 格式串使用的 fmt 参数槽位
+- `data_offset`
+  - payload 尾部追加地址块的首槽位
+
+这两个概念不再被默认视为同一个值。
 
 ## Transport 统一原则
 

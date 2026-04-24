@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
+from ..plugins.fmt import FmtService
+from ..transports import build_transport
 from ..transports.base import BaseTransport
 from .analysis import CorefileAnalyzer
 from .catalog import LibcCatalogService
 from .inference import InferenceService
 from .models import ContextKind, RecordDomain, TargetSpec, TransportSpec
+from .replay import ReplayEventKind
 from .registry import EvidenceRegistry
 from .resolve import ResolveService
 
@@ -23,6 +27,7 @@ class CHunSession:
     - `target`：目标描述
     - `transport_spec`：transport 配置
     - `transport`：实际 transport 实例
+    - `elf` / `libc_elf`：当前运行时绑定的二进制对象
     - `registry` / `rec`：统一事实层入口
     - `infer`：最小 inference 服务
     - `dbg` / `gdb_mi`：调试桥接入口
@@ -42,9 +47,17 @@ class CHunSession:
     gdb_mi: GdbMiBridge = field(init=False)
     resolve: ResolveService = field(init=False)
     crash: CorefileAnalyzer = field(init=False)
+    fmt: FmtService = field(init=False)
+    replay_session_factory: Callable[[], "CHunSession"] | None = field(
+        default=None,
+        repr=False,
+    )
+    replay_silent: bool = True
 
     def __post_init__(self) -> None:
-        self.infer = InferenceService(self.registry, libc_catalog=self.libc_catalog, session=self)
+        self.infer = InferenceService(
+            self.registry, libc_catalog=self.libc_catalog, session=self
+        )
         self.dbg = PwntoolsGdbBridge(self.registry, self.target, lambda: self.raw)
         self.gdb_mi = GdbMiBridge(self.registry, self.target)
         self.resolve = ResolveService(
@@ -54,7 +67,9 @@ class CHunSession:
             session=self,
         )
         self.crash = CorefileAnalyzer(self.registry)
+        self.fmt = FmtService(self)
         self._seed_context()
+        self._bind_replay_hook()
 
     def _seed_context(self) -> None:
         self.registry.set_context(
@@ -109,69 +124,31 @@ class CHunSession:
         *,
         elf: object | None = None,
         libc_elf: object | None = None,
-    ) -> "CHunSession":
+        source: str = "session",
+    ) -> None:
         """绑定当前会话使用的 ELF / libc ELF 富对象，并同步标量上下文。"""
         if elf is not None:
             self.elf = elf
-            self._sync_binary_context("binary", elf, kind=ContextKind.ENVIRONMENT)
-            self._sync_arch_context(elf)
         if libc_elf is not None:
             self.libc_elf = libc_elf
-            self._sync_binary_context("libc", libc_elf, kind=ContextKind.LIBC)
-        return self
 
-    def _sync_binary_context(self, prefix: str, binary: object, *, kind: ContextKind) -> None:
-        path = getattr(binary, "path", None)
-        arch = getattr(binary, "arch", None)
-        bits = getattr(binary, "bits", None)
-
-        if isinstance(path, str) and path:
-            self.registry.set_context(
-                f"{prefix}.path",
-                path,
-                kind=kind,
-                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
-            )
-        if isinstance(arch, str) and arch:
-            self.registry.set_context(
-                f"{prefix}.arch",
-                arch,
-                kind=kind,
-                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
-            )
-        if isinstance(bits, int):
-            self.registry.set_context(
-                f"{prefix}.bits",
-                bits,
-                kind=kind,
-                domain=RecordDomain.ELF if prefix == "binary" else RecordDomain.LIBC,
-            )
-
-    def _sync_arch_context(self, binary: object) -> None:
-        bits = getattr(binary, "bits", None)
-        endian = getattr(binary, "endian", None)
-        pointer_size = getattr(binary, "bytes", None)
-
-        if isinstance(bits, int):
-            self.registry.set_context(
-                "arch.bits",
-                bits,
-                kind=ContextKind.ENVIRONMENT,
+        if self.elf is not None:
+            self._sync_binary_context(
+                prefix="binary",
+                binary=self.elf,
+                kind=ContextKind.TARGET,
                 domain=RecordDomain.ELF,
+                source=source,
             )
-        if isinstance(endian, str) and endian:
-            self.registry.set_context(
-                "arch.endian",
-                endian,
-                kind=ContextKind.ENVIRONMENT,
-                domain=RecordDomain.ELF,
-            )
-        if isinstance(pointer_size, int):
-            self.registry.set_context(
-                "arch.pointer_size",
-                pointer_size,
-                kind=ContextKind.ENVIRONMENT,
-                domain=RecordDomain.ELF,
+            self._sync_arch_context(self.elf, source=source)
+
+        if self.libc_elf is not None:
+            self._sync_binary_context(
+                prefix="libc",
+                binary=self.libc_elf,
+                kind=ContextKind.LIBC,
+                domain=RecordDomain.LIBC,
+                source=source,
             )
 
     def open(self) -> "CHunSession":
@@ -189,6 +166,31 @@ class CHunSession:
         """重建 transport。"""
         self.transport.reconnect()
         self._sync_transport_context()
+
+    def checkpoint(self, name: str, *, metadata: dict[str, object] | None = None) -> object:
+        """在 replay trace 中打一个手工检查点。"""
+        return self.rec.checkpoint(name, metadata=metadata or {})
+
+    def make_replay_session(self) -> "CHunSession":
+        """构造用于 replay 验证的独立 session。"""
+        if self.replay_session_factory is not None:
+            return self.replay_session_factory()
+        target = deepcopy(self.target)
+        spec = deepcopy(self.transport_spec)
+        if self.replay_silent:
+            target.metadata = dict(target.metadata)
+            target.metadata["log_level"] = "error"
+        replay_session = CHunSession(
+            target=target,
+            transport_spec=spec,
+            transport=build_transport(target, spec),
+        )
+        replay_session.bind_binaries(
+            elf=self.elf,
+            libc_elf=self.libc_elf,
+            source="replay.clone",
+        )
+        return replay_session
 
     @property
     def rec(self) -> EvidenceRegistry:
@@ -235,6 +237,125 @@ class CHunSession:
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
         self.close()
+
+    def _sync_binary_context(
+        self,
+        *,
+        prefix: str,
+        binary: object,
+        kind: ContextKind,
+        domain: RecordDomain,
+        source: str,
+    ) -> None:
+        path = getattr(binary, "path", None)
+        if isinstance(path, str) and path:
+            self.registry.set_context(
+                f"{prefix}.path",
+                path,
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+        arch_name = getattr(binary, "arch", None)
+        if arch_name:
+            self.registry.set_context(
+                f"{prefix}.arch",
+                str(arch_name),
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+        bits = getattr(binary, "bits", None)
+        if bits is not None:
+            self.registry.set_context(
+                f"{prefix}.bits",
+                int(bits),
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+    def _sync_arch_context(self, binary: object, *, source: str) -> None:
+        bits = getattr(binary, "bits", None)
+        if bits is not None:
+            bits_value = int(bits)
+            self.registry.set_context(
+                "arch.bits",
+                bits_value,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
+                source=source,
+            )
+            self.registry.set_context(
+                "arch.pointer_size",
+                bits_value // 8,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
+                source=source,
+            )
+
+        endian = self._binary_endian(binary)
+        if endian is not None:
+            self.registry.set_context(
+                "arch.endian",
+                endian,
+                kind=ContextKind.ENVIRONMENT,
+                domain=RecordDomain.ELF,
+                source=source,
+            )
+
+    def _bind_replay_hook(self) -> None:
+        if hasattr(self.transport, "bind_replay_hook"):
+            self.transport.bind_replay_hook(self._handle_transport_replay_event)
+
+    def _handle_transport_replay_event(self, event: str, payload: dict[str, object]) -> None:
+        if event == "spawn":
+            self.rec.append_event(
+                ReplayEventKind.SPAWN,
+                metadata={
+                    "target_kind": payload.get("target_kind"),
+                    "binary": payload.get("binary"),
+                    "host": payload.get("host"),
+                    "port": payload.get("port"),
+                },
+            )
+            return
+        if event == "send":
+            data = payload.get("payload")
+            if isinstance(data, bytes):
+                self.rec.append_event(ReplayEventKind.SEND, payload=data)
+            return
+        if event == "sendline":
+            data = payload.get("payload")
+            if isinstance(data, bytes):
+                self.rec.append_event(ReplayEventKind.SENDLINE, payload=data)
+            return
+        if event == "expect":
+            data = payload.get("payload")
+            if isinstance(data, bytes):
+                self.rec.append_event(
+                    ReplayEventKind.EXPECT,
+                    payload=data,
+                    drop=bool(payload.get("drop", False)),
+                )
+
+    @staticmethod
+    def _binary_endian(binary: object) -> str | None:
+        if hasattr(binary, "little_endian"):
+            return "little" if bool(getattr(binary, "little_endian", True)) else "big"
+        endianness = getattr(binary, "endianness", None)
+        if isinstance(endianness, str) and endianness:
+            normalized = endianness.lower()
+            if normalized in {"little", "big"}:
+                return normalized
+        endian = getattr(binary, "endian", None)
+        if isinstance(endian, str) and endian:
+            normalized = endian.lower()
+            if normalized in {"little", "big"}:
+                return normalized
+        return None
 
 
 __all__ = ["CHunSession"]

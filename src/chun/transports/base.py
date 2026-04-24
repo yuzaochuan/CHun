@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 
 from ..core.errors import TransportCapabilityError, TransportClosedError
 from ..core.models import TargetSpec, TransportSpec
@@ -16,6 +16,7 @@ class BaseTransport(ABC):
         self.target = target
         self.spec = spec
         self._is_open = False
+        self._replay_hook: Callable[[str, dict[str, object]], None] | None = None
 
     @property
     def is_open(self) -> bool:
@@ -27,6 +28,13 @@ class BaseTransport(ABC):
             return
         self._open()
         self._is_open = True
+        self._emit_replay(
+            "spawn",
+            target_kind=self.target.kind,
+            binary=self.target.binary,
+            host=self.target.host,
+            port=self.target.port,
+        )
 
     def close(self) -> None:
         """关闭 transport。"""
@@ -41,6 +49,17 @@ class BaseTransport(ABC):
         """默认的重连策略：先关后开。"""
         self.close()
         self.open()
+
+    def bind_replay_hook(
+        self,
+        hook: Callable[[str, dict[str, object]], None] | None,
+    ) -> None:
+        self._replay_hook = hook
+
+    def _emit_replay(self, event: str, **payload: object) -> None:
+        if self._replay_hook is None:
+            return
+        self._replay_hook(event, dict(payload))
 
     def _require_open(self) -> None:
         if not self._is_open:

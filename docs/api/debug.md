@@ -124,7 +124,7 @@ system_addr = session.resolve.symbol("system")
 bin_sh_addr = session.resolve.symbol("str_bin_sh")
 ```
 
-如果候选唯一，上面的 `index` 可以省略；`search_libc()` 会直接写回 `libc.version` 和 `libc.base`。
+如果候选唯一，上面的 `index` 可以省略；`search_libc()` 会直接写回 `libc.version` 和 `libc.base`。若 session 已经绑定了题目给定的 `libc_elf`，`resolve.symbol()` 也可以只依赖 `libc.base` 直接工作，并在缺符号时再回退到 catalog。
 
 ### core dump analysis
 

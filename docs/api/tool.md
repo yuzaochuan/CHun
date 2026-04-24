@@ -34,6 +34,7 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - 显式挂出 `rec` / `infer` / `resolve` / `dbg` / `crash` 等 session 核心能力
 - 显式挂出 `sendlineafter()` / `recvline()` / `interactive()` 以及 `sla()` / `rl()` / `ia()` 等高频方法
 - 显式挂出 `recv_leak()`，用于脚本态直接接收并记录 leak
+- 显式挂出 `replay()`，用于脚本态按“当前位置前缀”回放并注入 payload
 - `session` / `io`：保留为底层出口
 
 显式工厂与 `CHun.script()` 在内部都会先收敛到同一套 `TargetSpec` / `TransportSpec` builder，再交给 `from_specs()` 组装 session。
@@ -94,7 +95,7 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - `CHun.http(base_url, *, headers=None, timeout=None, follow_redirects=True, verify=True, client_factory=None)`
 - `CHun.websocket(ws_url, *, headers=None, timeout=None, connect_timeout=None, connection_factory=None)`
 - `CHun.blind(connection_factory, *, timeout=None)`
-- `CHun.script(binary, *, host=None, port=None, libc=None, ld=None, argv=None, env=None, cwd=None, timeout=None, log_level="debug", terminal=("tmux", "splitw", "-h"))`
+- `CHun.script(binary, *, host=None, port=None, libc=None, ld=None, argv=None, env=None, cwd=None, timeout=None, log_level="debug", terminal=("tmux", "splitw", "-h", "-d"))`
 
 ## `CHun.script()`
 
@@ -141,9 +142,14 @@ t.gdb("b *main\nc")
 - `t.recv_leak(...)` 的返回值就是解析后的整数泄漏；脚本态优先直接使用返回值，而不是再手动 `get_observation(...).value`
 - `t.recv_leak(name)` 支持没有明显前缀的场景：若不传 `delim` / `regex`，会直接按当前 `mode` 从流中读取泄漏值
 - `t.recv_leak(..., mode="raw")` 默认按常见 CTF 泄漏习惯读取 32 位 `4` 字节、64 位 `6` 字节，再按 `t.elf.bytes` 补零解析
-- `t.recv_leak(..., mode="hex")` 支持 `0x...` 十六进制字符串解析
+- `t.recv_leak(..., mode="hex")` 会从读到的文本里提取全部 `0x...` 地址 token；默认取第一个，可用 `index=` 指定第几个命中
+- `t.recv_leak(..., mode="hex", delim=..., delim_end=...)` 可限定提取窗口到两个分隔符之间；若命中多个地址会 `warning` 输出完整列表和默认选中的地址
+- `t.replay(payload, checkpoint=...)` 默认把“当前调用位置”当作 checkpoint 回放前缀；传 `checkpoint=` 时按 `[:checkpoint]` 回放
+- `t.replay(action, *args, action_kwargs=...)` 支持函数模式；无需改外部函数签名，语法糖会在 replay 子会话里临时绑定全局 `s`
+- `t.replay(..., expected=...)` 可做命中判断；`capture_replay_registry=True` 回传 replay 子会话 rec 展示到 `result.metadata["replay_registry_lines"]`
+- `t.replay(..., show_recv=True)` 会输出 `[replay recv]`；内部会临时提升日志级别后再恢复，不受 `replay_silent` 影响
 - `t.libc_base` / `t.libc_version` 以及 `t.session.libc_base` / `t.session.libc_version` 提供快捷读取；若尚未确认则抛 `RuntimeError`
-- `t.resolve.symbol("str_bin_sh")` / `t.resolve.symbol("puts@got")` 会自动做后缀剥离和 alias 归一化，再结合 `libc.base + libc.version` 解析绝对地址
+- `t.resolve.symbol("str_bin_sh")` / `t.resolve.symbol("puts@got")` 会自动做后缀剥离和 alias 归一化；已绑定 `t.libc` 时优先走本地 `libc_elf + libc.base`，否则回退到 `libc.version + catalog`
 - 访问 `t.session` / `t.rec` / `t.infer` / `t.resolve` / `t.dbg` / `t.crash` 前必须先 `t.start()`；否则抛 `RuntimeError`
 - 高频交互方法可直接使用 `t.sendlineafter()` / `t.recvline()` / `t.interactive()` 及其 alias
 - 低频 tube 方法通过 `__getattr__` fallback 到 `t.io`
@@ -164,6 +170,7 @@ t.gdb("b *main\nc")
 - `session.open()`：显式打开 transport
 - `session.close()`：关闭 transport
 - `session.reconnect()`：重建 transport
+- `session.bind_binaries(elf=..., libc_elf=...)`：绑定运行时二进制对象，并同步 `session` 字段与规范化 `registry context`
 - `session.io`：首次访问时自动打开 transport
 - pwntools 场景下可直接使用 `session.io.sendlineafter()` / `session.io.interactive()`
 - pwntools 场景下，未显式列出的常用 `tube` 方法也会透传，例如 `session.io.recvline()`
@@ -173,6 +180,8 @@ t.gdb("b *main\nc")
 - `session.gdb_mi`：结构化 GDB/MI 命令
 - `session.resolve`：MemLeak / DynELF / symbol 解析
 - `session.crash`：core dump 分析
+- `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、提供重构后的 read 子系统、生成并持久化 `FmtWritePlan`、执行 task 级渲染与默认 executor 分发；写路径内部采用“CHun 语义层 + pwntools backend”两层架构，默认把 atom 生成、排序与 `fmt/data` 拆分委托给 `pwnlib.fmtstr`，同时继续保留 CHun 的 typed models、registry 回写与 transport orchestration；`read()` 默认走“内存字符串泄漏” primitive，但也支持通过 `fmt=`、`append_target=`、`recv_until=` 覆盖 payload 与捕获边界；高层 `write()` / `writes()` / `execute_plan()` 会返回聚合后的 `FmtExecutionResult`，内部收纳 `receipts`、`responses` 与 `task_indexes`；执行时会按 transport 类型选择 `sendline` 或 blind `exchange`，同时把原始响应写 observation、把 `FmtExecutionReceipt` 写 artifact；write path 现在显式区分 `offset` 与 `data_offset`；缺 offset、符号解析失败、读写分发失败现在都会抛出明确的 fmt 异常，而不是裸 `RuntimeError`；`find_offset(loginfo=False)` 默认静默，显式打开后会打印命中的 index / token / signature / confidence
+- `ScriptEntry.fmt`：脚本态 `session.fmt` 语法糖；除常规转发外，`s.fmt.find_offset(...)` 会默认以 `loginfo=True` 打印探测结果，等价于 `s.session.fmt.find_offset(..., loginfo=True)`
 
 ## 示例
 
@@ -188,7 +197,55 @@ api = CHun.http("http://127.0.0.1:8000")
 print(api.io.request("GET", "/health"))
 ```
 
+```python
+plan = p.fmt.plan_writes(
+    {"printf@got": "system"},
+    artifact_name="fmt.plan.printf2system",
+)
+print(plan.total_atoms, plan.total_tasks)
+
+rendered = p.fmt.render_plan(plan, offset=6)
+print(rendered[0].payload)
+
+result = p.fmt.execute_plan(plan, offset=6)
+print(result.responses[0])
+```
+
+```python
+s = CHun.script("./challenge").start()
+result = s.fmt.find_offset(max_slots=16)
+print(result.index)
+
+verify = s.replay(b"7", show_recv=True)
+print(verify.ok, verify.reason)
+
+# 函数模式（保持外部函数不改）
+# def show(index): menu(3); s.sla(b"Index: ", str(index).encode())
+verify2 = s.replay(show, 7, show_recv=True)
+print(verify2.ok, verify2.reason)
+```
+
+```python
+leak = p.fmt.read(0x404040, size=8, mode="raw", offset=6)
+print(leak.raw)
+
+ptr = p.fmt.read(
+    0x0,
+    size=8,
+    mode="pointer",
+    offset=6,
+    fmt="%6$p",
+    append_target=False,
+    recv_until=None,
+    strict_terminator=False,
+)
+print(hex(ptr.decoded))
+
+result = p.fmt.write("printf@got", "system", strategy="short", offset=6)
+print(result.total_tasks, result.responses[0])
+```
+
 ## 本阶段边界
 
-- 已完成：session/runtime 入口、registry 挂接、最小 inference、debug/resolve/crash bridge
-- 未完成：完整 `fmt / heap / tpl` 子系统，以及 pwngdb/pwndbg 深集成
+- 已完成：session/runtime 入口、registry 挂接、最小 inference、debug/resolve/crash bridge、fmt 探测/规划/渲染/执行链
+- 未完成：heap / tpl 子系统，以及 pwngdb/pwndbg 深集成

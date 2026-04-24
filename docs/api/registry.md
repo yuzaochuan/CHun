@@ -16,7 +16,7 @@
   - 例如 symbol leak、HTTP 响应、blind 探测结果
 - `facts`
   - 已确认或经过归纳的稳定结论
-  - 例如 `libc.base`、`fmt.input_offset`
+  - 例如 `libc.base`、`fmt.offset`
 - `artifacts`
   - 可复用产物
   - 例如 payload、脚本、模板渲染结果、libc catalog 检索结果
@@ -60,6 +60,188 @@
 - `kind`
 - `tag`
 - `source`
+
+## Replay Trace（热路径）
+
+`EvidenceRegistry` 现在内置一套 compact replay recorder，用于低开销记录“可重放最小前缀”，而不是 full workflow。
+
+默认只记录外部 effect 事件：
+
+- `spawn`
+- `send`
+- `sendline`
+- `expect`（`recvuntil` 同步锚点）
+- `checkpoint`
+
+对应 API：
+
+- `append_event(...)`
+- `checkpoint(name, ...)`
+- `slice_to_here(from_checkpoint=...)`
+- `render_replay(...)` / `show_replay(...)`
+- `run_replay(...)`
+
+这里的大 payload 不直接内联到 event 里，而是通过 blob ref 去重引用。
+
+详细方法级说明（事件模型、切片语义、重放顺序、日志恢复、边界约束）见：[Replay API](replay.md)。
+
+注意：`show()` 目前只展示 `context / observations / facts / artifacts` 四层，不会把 replay events 混在这四层输出里。
+
+如果你要查看 replay 记录，使用：
+
+```python
+events = list(session.rec.replay.iter_events())
+checkpoints = session.rec.replay.checkpoints
+snapshot = session.rec.to_dict()["replay"]
+session.rec.show_replay(include_payload=True, limit=20)
+```
+
+### Observation 验证与晋升
+
+新增最小闭环：
+
+- `validate_observation(...)`
+  - 基于 replay slice + probe + predicate 做独立会话验证
+  - 会回写 observation metadata：
+    - `verification_status`
+    - `verified_by`
+    - `verification_reason`
+  - 可选 `capture_replay_registry=True`，把 replay 子会话的 `rec.show(...)` 文本放进 `VerificationResult.metadata["replay_registry_lines"]`
+- `promote_observation_to_fact(...)`
+  - 把 observation 显式晋升为 fact
+
+推荐语义是：
+
+1. 先写 observation（例如 `fmt.offset.candidate`）
+2. 按需触发验证
+3. 验证通过后再晋升 `fmt.offset` fact
+
+## 快照与打印
+
+`EvidenceRegistry` 现在还提供一组面向调试和运行期观测的公共接口：
+
+- `snapshot(...)`
+- `render(...)`
+- `show(...)`
+
+推荐分工：
+
+- `snapshot(...)`
+  - 返回结构化快照
+  - 适合 CLI / workflow / 业务逻辑二次处理
+- `render(...)`
+  - 返回可直接展示的文本行
+  - 适合测试、dry-run、上层自定义输出
+- `show(...)`
+  - 直接通过 `log.debug/info/warning` 输出
+  - 适合 `session.rec.show(...)` 这种会话期排障入口
+
+### 分层筛选优先于日志等级
+
+这组接口的主筛选维度是 `layers`，而不是日志等级。
+
+可选层固定为四类：
+
+- `context`
+- `observations`
+- `facts`
+- `artifacts`
+
+默认顺序也是：
+
+1. `context`
+2. `observations`
+3. `facts`
+4. `artifacts`
+
+这表示：
+
+- 先决定“看哪几层”
+- 再决定“展开到多详细”
+- 最后才决定“以什么日志级别打出去”
+
+### 关键参数
+
+- `layers=...`
+  - 选择输出哪些层
+  - 支持单个字符串或元组，例如 `layers="facts"`、`layers=("context", "facts")`
+- `detail=...`
+  - 控制详细度
+  - 可选：`compact` / `standard` / `verbose`
+- `emit=...`
+  - 只影响 `show(...)` 用什么日志级别输出
+  - 可选：`debug` / `info` / `warning`
+- `artifact_mode=...`
+  - 控制 artifact 的值如何展示
+  - 可选：`summary` / `repr` / `skip`
+- `domain=...` / `source=...` / `tag=...`
+  - 复用 registry 现有过滤语义
+- `limit=...`
+  - 按层裁剪记录数，而不是全局裁剪
+
+### 推荐用法
+
+快速查看当前会话最关键的上下文和事实：
+
+```python
+session.rec.show(
+    layers=("context", "facts"),
+    detail="standard",
+)
+```
+
+只看 workflow 相关事实，并用 `debug` 级别打出：
+
+```python
+session.rec.show(
+    layers=("context", "observations", "facts"),
+    domain=RecordDomain.WORKFLOW,
+    emit="debug",
+)
+```
+
+只取结构化快照，不立即打印：
+
+```python
+snapshot = session.rec.snapshot(
+    layers=("facts", "artifacts"),
+    domain=RecordDomain.LIBC,
+    limit=5,
+)
+```
+
+### 输出示例
+
+`detail="standard"`：
+
+```text
+[Registry] ctx=1 obs=1 facts=2 arts=0 total=4
+[Context]
+workflow.current_checkpoint      pwn3.menu kind=session domain=workflow src=session
+[Observations]
+__malloc_hook                    0x7f3a2c8f4be0 kind=symbol-leak domain=libc src=leak conf=0.70
+[Facts]
+libc.base                        0x7f3a2c875000 kind=base-address domain=libc src=infer conf=0.95
+resolved.system                  0x7f3a2c8c1490 kind=symbol-address domain=resolve src=resolve conf=0.90
+```
+
+`detail="verbose"`：
+
+```text
+[Registry] ctx=0 obs=0 facts=1 arts=0 total=1
+[Facts]
+name        libc.base
+value       0x7f3a2c875000
+kind        base-address
+domain      libc
+source      infer.libc_base_from_symbol_leak
+confidence  0.95
+evidence    __malloc_hook
+metadata    {'symbol_offset': 0x1ebb70}
+ts          2026-04-22T12:34:56+00:00
+```
+
+如果 `artifact_mode="skip"`，artifact 只参与原始 registry 存储，不参与本次展示。
 
 如果你希望在业务侧拿到“不可空且值类型明确”的结果，而不是自己手写 `None` 判断和 `isinstance(...)`，可以使用严格读取 helper：
 
@@ -144,9 +326,10 @@
 `session.resolve.symbol(name)` 则会继续消费事实层：
 
 1. 读取 `libc.base`
-2. 读取 `libc.version.metadata["libc_id"]`
-3. 通过本地 SQLite catalog 查询 offset
-4. 返回 `libc.base + offset`
+2. 若 session 已绑定 `libc_elf`，优先直接从本地 `libc` 解析 offset
+3. 若本地 `libc_elf` 不可用或缺符号，再读取 `libc.version.metadata["libc_id"]`
+4. 通过本地 SQLite catalog 查询 offset
+5. 返回 `libc.base + offset`
 
 这里的 `name` 支持服务层归一化，因此 `puts@got`、`write_plt`、`str_bin_sh` 这类常见写法都可以直接传入，不需要污染底层 catalog 表结构。
 
@@ -167,5 +350,6 @@
 - 类型名使用 `EvidenceRegistry`
 - 会话内访问优先使用 `session.registry`
 - 需要短写时使用 `session.rec`
+- 需要快速查看当前记录时，优先使用 `session.rec.show(...)`
 
 不再把额外别名当作长期公开接口。

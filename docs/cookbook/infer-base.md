@@ -121,7 +121,7 @@ print(session.registry.get_fact("libc.version"))
 print(session.registry.get_fact("libc.base"))
 ```
 
-确认过 `libc.version` 和 `libc.base` 后，就可以直接通过 resolve façade 取绝对地址：
+确认过 `libc.base` 后，就可以直接通过 resolve façade 取绝对地址；若当前 session 已经绑定了题目给定的 `libc`，`resolve.symbol()` 会优先直接使用这个本地 `libc_elf`，不再强依赖 `search_libc()` 先确认版本：
 
 ```python
 system_addr = session.resolve.symbol("system")
@@ -133,17 +133,20 @@ print(hex(bin_sh_addr))
 print(hex(puts_addr))
 ```
 
-`resolve.symbol()` 依赖两条事实：
+`resolve.symbol()` 至少依赖一条事实：
 
 - `libc.base`
-- `libc.version`，且其 metadata 中包含 `libc_id`
+
+随后按 mix 优先级解析：
+
+- 若 session 已绑定 `libc_elf`，优先读取本地符号表（`str_bin_sh` 额外支持 `/bin/sh` 搜索）
+- 若本地 `libc_elf` 不可用或缺符号，再读取 `libc.version.metadata["libc_id"]` 并回退到 catalog
 
 脚本态可以进一步简写为：
 
 ```python
 t = CHun.script("./challenge").start()
-t.infer.search_libc(index=0)
+t.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
 print(hex(t.libc_base))
-print(t.libc_version)
 print(hex(t.resolve.symbol("str_bin_sh")))
 ```
