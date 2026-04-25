@@ -128,6 +128,7 @@ t.gdb("b *main\nc")
 - `REMOTE` 且非 `GDB` 时，remote target 的 `log_level` 固定为 `"info"`
 - `REMOTE GDB` 时，remote target 继承 process 侧 `log_level`（不强制降级到 `"info"`）
 - 传 `GDB` 且当前 session 是本地 process 时，`t.gdb()` 调用现有 `session.dbg.attach()`
+- `t.debug()` 启动后不再暂停等待按键，直接继续执行脚本
 - `REMOTE GDB` 时只 warning，不会 attach
 - `t.target` 是当前脚本入口使用的 `TargetSpec` 配置对象
 - `t.start()` 返回 `t` 自身，因此 `t = CHun.script(...).start()` 与 `t = CHun.script(...); t.start()` 都可用
@@ -144,6 +145,10 @@ t.gdb("b *main\nc")
 - `t.recv_leak(..., mode="raw")` 默认按常见 CTF 泄漏习惯读取 32 位 `4` 字节、64 位 `6` 字节，再按 `t.elf.bytes` 补零解析
 - `t.recv_leak(..., mode="hex")` 会从读到的文本里提取全部 `0x...` 地址 token；默认取第一个，可用 `index=` 指定第几个命中
 - `t.recv_leak(..., mode="hex", delim=..., delim_end=...)` 可限定提取窗口到两个分隔符之间；若命中多个地址会 `warning` 输出完整列表和默认选中的地址
+- `t.gadget["rdi"]` 语义为 `pop rdi; ret`；`t.gadget["rsi_r15"]` 语义为 `pop rsi; pop r15; ret`
+- `t.gadget["ret"]` 语义为 `ret`，`t.gadget["leave"]` 语义为 `leave; ret`
+- `t.gadget["libc:rdi"]` 表示从 libc 镜像查找对应 gadget；不带前缀时默认查 ELF 镜像
+- 脚本层当前会直接打印 `[script-timing]` 耗时日志（ELF/libc 解析、`start()`、`gadget` 解析、`fmt.find_offset()`、`replay()`），用于排查慢点
 - `t.replay(payload, checkpoint=...)` 默认把“当前调用位置”当作 checkpoint 回放前缀；传 `checkpoint=` 时按 `[:checkpoint]` 回放
 - `t.replay(action, *args, action_kwargs=...)` 支持函数模式；无需改外部函数签名，语法糖会在 replay 子会话里临时绑定全局 `s`
 - `t.replay(..., expected=...)` 可做命中判断；`capture_replay_registry=True` 回传 replay 子会话 rec 展示到 `result.metadata["replay_registry_lines"]`
@@ -161,6 +166,7 @@ t.gdb("b *main\nc")
 
 - `CHun.process()` / `CHun.remote()` / `CHun.ssh_process()` / `CHun.http()` / `CHun.websocket()` / `CHun.blind()` 在内部都先落到同一套私有 `TargetSpec` / `TransportSpec` builder
 - `CHun.script()` 也不再单独拼装 transport，而是复用相同 builder，再统一走 `from_specs()`
+- 脚本态实现已从单文件 `src/chun/script.py` 拆分为 `src/chun/script/` 包（`entry.py` / `replay.py` / `fmt.py` / `constants.py`）；对外 API 与导入路径保持不变
 - `ScriptEntry.target` 是脚本入口缓存的基础 `TargetSpec`
 - `ScriptEntry.start()` 在 `REMOTE` 模式下会基于该 target 派生 remote target，再配合 `pwntools-tube` transport 进入统一 session 装配路径
 - `ScriptEntry` 保留的脚本态额外状态只有 `elf`、`libc` 和当前 `session`
@@ -182,6 +188,7 @@ t.gdb("b *main\nc")
 - `session.crash`：core dump 分析
 - `session.fmt`：无状态 fmt 服务，负责从 session/registry 读取架构上下文、做符号归一化、按 `sequential` / `positional_window` 两种模式探测并持久化 `fmt.offset`、提供重构后的 read 子系统、生成并持久化 `FmtWritePlan`、执行 task 级渲染与默认 executor 分发；写路径内部采用“CHun 语义层 + pwntools backend”两层架构，默认把 atom 生成、排序与 `fmt/data` 拆分委托给 `pwnlib.fmtstr`，同时继续保留 CHun 的 typed models、registry 回写与 transport orchestration；`read()` 默认走“内存字符串泄漏” primitive，但也支持通过 `fmt=`、`append_target=`、`recv_until=` 覆盖 payload 与捕获边界；高层 `write()` / `writes()` / `execute_plan()` 会返回聚合后的 `FmtExecutionResult`，内部收纳 `receipts`、`responses` 与 `task_indexes`；执行时会按 transport 类型选择 `sendline` 或 blind `exchange`，同时把原始响应写 observation、把 `FmtExecutionReceipt` 写 artifact；write path 现在显式区分 `offset` 与 `data_offset`；缺 offset、符号解析失败、读写分发失败现在都会抛出明确的 fmt 异常，而不是裸 `RuntimeError`；`find_offset(loginfo=False)` 默认静默，显式打开后会打印命中的 index / token / signature / confidence
 - `ScriptEntry.fmt`：脚本态 `session.fmt` 语法糖；除常规转发外，`s.fmt.find_offset(...)` 会默认以 `loginfo=True` 打印探测结果，等价于 `s.session.fmt.find_offset(..., loginfo=True)`
+- `s.fmt.find_offset(...)` 现在保留完整显式参数签名（`verify_*`、`window_*`、`source` 等），便于 IDE 补全和手写 exp 时直接查参
 
 ## 示例
 
@@ -215,6 +222,9 @@ print(result.responses[0])
 s = CHun.script("./challenge").start()
 result = s.fmt.find_offset(max_slots=16)
 print(result.index)
+
+print(hex(s.gadget["rdi"]))
+print(hex(s.gadget["libc:rdi"]))
 
 verify = s.replay(b"7", show_recv=True)
 print(verify.ok, verify.reason)

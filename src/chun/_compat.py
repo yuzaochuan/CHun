@@ -24,6 +24,7 @@ try:
         Corefile,
         DynELF,
         MemLeak,
+        ROP,
         args,  # type: ignore
         context,
         cyclic_find,
@@ -103,6 +104,7 @@ except Exception:  # pragma: no cover
     DynELF = _missing
     Corefile = _missing
     cyclic_find = _missing
+    ROP = _missing
 
 
 __all__ = [
@@ -110,6 +112,7 @@ __all__ = [
     "DynELF",
     "ELF",
     "MemLeak",
+    "ROP",
     "args",
     "context",
     "cyclic_find",

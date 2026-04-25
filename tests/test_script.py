@@ -326,12 +326,10 @@ def test_script_gdb_attaches_for_local_process(
     ]
 
 
-def test_script_debug_starts_process_under_gdb_and_waits_for_keypress(
+def test_script_debug_starts_process_under_gdb_without_keypress_pause(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
 ) -> None:
-    wait_calls = 0
-
     class FakeController:
         pass
 
@@ -363,18 +361,9 @@ def test_script_debug_starts_process_under_gdb_and_waits_for_keypress(
         )
         return debug_tube
 
-    def fake_wait() -> None:
-        nonlocal wait_calls
-        wait_calls += 1
-
     monkeypatch.setattr(script_mod.args, "REMOTE", False)
     monkeypatch.setattr(script_mod.args, "GDB", True)
     monkeypatch.setattr(script_mod.gdb, "debug", fake_debug)
-    monkeypatch.setattr(
-        script_mod.ScriptEntry,
-        "_wait_for_debugger_keypress",
-        staticmethod(fake_wait),
-    )
 
     entry = CHun.script(
         "./challenge",
@@ -395,7 +384,6 @@ def test_script_debug_starts_process_under_gdb_and_waits_for_keypress(
             "cwd": "/tmp/challenge",
         }
     ]
-    assert wait_calls == 1
     assert entry.dbg._controller is debug_tube.gdb
     assert entry.sendline(b"PING") is None
     assert debug_tube.calls[-1] == ("sendline", (b"PING",), {})
@@ -1694,3 +1682,142 @@ def test_script_getattr_falls_back_to_io_only(
 
     with pytest.raises(AttributeError):
         _ = entry._hidden
+
+
+def test_script_gadget_sugar_parses_register_token_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[tuple[object, tuple[str, ...]]] = []
+
+    class FakeGadget:
+        def __init__(self, address: int) -> None:
+            self.address = address
+
+    class FakeROP:
+        def __init__(self, image: object) -> None:
+            self._image = image
+
+        def find_gadget(self, items: list[str]) -> FakeGadget:
+            calls.append((self._image, tuple(items)))
+            return FakeGadget(0x401234)
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ROP", FakeROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.gadget["rsi_r15"] == 0x401234
+    assert calls == [(entry.elf, ("pop rsi", "pop r15", "ret"))]
+
+
+def test_script_gadget_sugar_supports_leave_and_ret(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[tuple[str, ...]] = []
+
+    class FakeGadget:
+        def __init__(self, address: int) -> None:
+            self.address = address
+
+    class FakeROP:
+        def __init__(self, _image: object) -> None:
+            pass
+
+        def find_gadget(self, items: list[str]) -> FakeGadget:
+            calls.append(tuple(items))
+            return FakeGadget(0x401000 + len(calls))
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ROP", FakeROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.gadget["ret"] == 0x401001
+    assert entry.gadget["leave"] == 0x401002
+    assert calls == [("ret",), ("leave", "ret")]
+
+
+def test_script_gadget_sugar_supports_libc_source_and_runtime_base(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.rec.record_fact("libc.base", 0x7F1200000000)
+    calls: list[object] = []
+
+    class FakeGadget:
+        def __init__(self, address: int) -> None:
+            self.address = address
+
+    class FakeROP:
+        def __init__(self, image: object) -> None:
+            self._image = image
+
+        def find_gadget(self, items: list[str]) -> FakeGadget:
+            _ = items
+            calls.append(self._image)
+            return FakeGadget(0x1234)
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ROP", FakeROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.gadget["libc:rdi"] == 0x7F1200001234
+    assert calls == [entry.libc]
+
+
+def test_script_gadget_sugar_rejects_invalid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    class FakeROP:
+        def __init__(self, _image: object) -> None:
+            pass
+
+        def find_gadget(self, items: list[str]) -> object:
+            _ = items
+            return object()
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ROP", FakeROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(ValueError):
+        _ = entry.gadget["libc:"]
