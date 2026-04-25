@@ -279,3 +279,21 @@ def test_process_runtime_reports_unresolved_expr_payload_clearly() -> None:
         )
     else:
         raise AssertionError("expected TypeError for unresolved workflow payload")
+
+
+def test_process_runtime_ignores_script_cache_kwargs_in_session_init_metadata() -> None:
+    runtime = ProcessWorkflowRuntime()
+    primitive = WorkflowPrimitive(
+        kind="session_init",
+        payload="./chall",
+        metadata={
+            "launcher_kwargs": {
+                "cache": True,
+                "cache_dir": "./.chun_cache",
+                "auto_local_libc": False,
+            }
+        },
+    )
+
+    session = runtime.start_session(primitive=primitive)
+    assert isinstance(session, CHunSession)

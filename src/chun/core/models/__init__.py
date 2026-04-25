@@ -18,6 +18,14 @@ from .action_ir import (
     TopLevelBlockDef,
 )
 from .analysis import CrashAnalysisResult, GdbMiResult, ResolvedSymbolResult
+from .cache import (
+    AddressMode,
+    ElfCacheRecord,
+    GadgetCacheQueryRecord,
+    GadgetCacheRecord,
+    LibcCacheRecord,
+    LibcSource,
+)
 from .catalog import LibcCandidate, LibcLeakConstraint, LibcSearchResult
 from .fmt import (
     AddressLike,
@@ -76,6 +84,7 @@ from .workflow import (
 
 __all__ = [
     "AddressLike",
+    "AddressMode",
     "AnalysisNode",
     "Artifact",
     "ArtifactKind",
@@ -117,11 +126,16 @@ __all__ = [
     "FmtWriteStrategy",
     "FmtWriteTask",
     "FunctionActionDef",
+    "ElfCacheRecord",
     "GdbMiResult",
+    "GadgetCacheQueryRecord",
+    "GadgetCacheRecord",
     "ImportModel",
     "ImportRef",
+    "LibcCacheRecord",
     "LibcCandidate",
     "LibcLeakConstraint",
+    "LibcSource",
     "LibcSearchResult",
     "LiteralNode",
     "NameRefNode",

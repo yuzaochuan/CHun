@@ -7,6 +7,7 @@ import chun.core.inference.service as inference_service_mod
 import pytest
 from chun import CHunSession
 from chun.core.catalog import LibcCatalogService, build_libc_database
+from chun.core.cache import CacheService
 from chun.core.errors import InferenceInputError, ResolverError
 from chun.core.inference import InferenceService
 from chun.core.models import (
@@ -722,6 +723,146 @@ def test_resolve_symbol_prefers_bound_libc_elf_without_requiring_version_fact() 
     )
 
     assert session.resolve.symbol("system") == 0x7F0000000000 + 0x4C490
+
+
+def test_resolve_symbol_uses_trusted_cached_libc_offsets_without_bound_libc(
+    tmp_path: Path,
+) -> None:
+    libc_path = tmp_path / "libc.so.6"
+    libc_path.write_bytes(b"fake-libc")
+
+    def fake_loader(path: str, checksec: bool = False) -> DummyElf:
+        _ = checksec
+        assert path == str(libc_path)
+        return DummyElf(path=path, sym={"system": 0x4C490, "puts": 0x080AA0})
+
+    cache = CacheService(root=tmp_path / "cache")
+    cache.ensure_libc_record(
+        libc_path,
+        loader=fake_loader,
+        source="specified",
+        trusted=True,
+        usable_for_remote=True,
+    )
+
+    session = build_session()
+    session.rec.record_fact(
+        "libc.base",
+        0x7F0000000000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+    session.resolve.configure_libc_cache(
+        cache_service=cache,
+        libc_path=str(libc_path),
+        source="specified",
+        trusted=True,
+        usable_for_remote=True,
+    )
+
+    assert session.resolve.symbol("system") == 0x7F0000000000 + 0x4C490
+
+
+def test_resolve_symbol_can_lazy_materialize_specified_libc_and_write_back_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    libc_path = tmp_path / "libc.so.6"
+    libc_path.write_bytes(b"fake-libc")
+
+    def seed_loader(path: str, checksec: bool = False) -> DummyElf:
+        _ = checksec
+        assert path == str(libc_path)
+        return DummyElf(path=path, sym={"system": 0x4C490})
+
+    def lazy_loader(path: str, checksec: bool = False) -> DummyElf:
+        _ = checksec
+        assert path == str(libc_path)
+        return DummyElf(path=path, sym={"__free_hook": 0x1EEB28})
+
+    cache = CacheService(root=tmp_path / "cache")
+    cache.ensure_libc_record(
+        libc_path,
+        loader=seed_loader,
+        source="specified",
+        trusted=True,
+        usable_for_remote=True,
+    )
+
+    monkeypatch.setattr("chun.core.resolve.service.PWN_ELF", lazy_loader)
+    session = build_session()
+    session.rec.record_fact(
+        "libc.base",
+        0x7F0000000000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+    session.resolve.configure_libc_cache(
+        cache_service=cache,
+        libc_path=str(libc_path),
+        source="specified",
+        trusted=True,
+        usable_for_remote=True,
+    )
+
+    assert session.resolve.symbol("__free_hook") == 0x7F0000000000 + 0x1EEB28
+    record = cache.get_libc_record(libc_path)
+    assert record is not None
+    assert record["extra_symbols"]["__free_hook"] == 0x1EEB28
+
+
+def test_resolve_symbol_raises_clear_error_when_no_trusted_libc_source_configured() -> None:
+    session = build_session()
+    session.rec.record_fact(
+        "libc.base",
+        0x7F0000000000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+    with pytest.raises(ResolverError, match="No trusted libc source configured"):
+        session.resolve.symbol("system")
+
+
+def test_resolve_symbol_rejects_local_detected_cache_for_remote_target(
+    tmp_path: Path,
+) -> None:
+    libc_path = tmp_path / "libc.so.6"
+    libc_path.write_bytes(b"fake-libc")
+
+    def fake_loader(path: str, checksec: bool = False) -> DummyElf:
+        _ = checksec
+        return DummyElf(path=path, sym={"system": 0x4C490})
+
+    cache = CacheService(root=tmp_path / "cache")
+    cache.ensure_libc_record(
+        libc_path,
+        loader=fake_loader,
+        source="local_detected",
+        trusted=True,
+        usable_for_remote=False,
+    )
+
+    session = CHunSession(
+        target=TargetSpec(kind="remote"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyTransport(),
+    )
+    session.rec.record_fact(
+        "libc.base",
+        0x7F0000000000,
+        kind=FactKind.BASE_ADDRESS,
+        domain=RecordDomain.LIBC,
+    )
+    session.resolve.configure_libc_cache(
+        cache_service=cache,
+        libc_path=str(libc_path),
+        source="local_detected",
+        trusted=True,
+        usable_for_remote=False,
+    )
+
+    with pytest.raises(ResolverError, match="No trusted libc source configured"):
+        session.resolve.symbol("system")
 
 
 def test_resolve_symbol_uses_bound_libc_search_for_str_bin_sh() -> None:

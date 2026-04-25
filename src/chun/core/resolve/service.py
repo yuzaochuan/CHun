@@ -6,6 +6,8 @@ import re
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol, SupportsInt
 
 from ...bridges.pwntools import MemLeakAdapter
+from ..._compat import ELF as PWN_ELF
+from ..cache import CacheService
 from ..catalog import LibcCatalogService
 from ..errors import ResolverError
 from ..inference import InferenceService
@@ -48,6 +50,11 @@ class ResolveService:
         )
         self.default_elf: object | None = None
         self.default_libc_elf: object | None = None
+        self.cache_service: CacheService | None = None
+        self.libc_cache_path: str | None = None
+        self.libc_cache_source: str = "unresolved"
+        self.libc_cache_trusted: bool = False
+        self.libc_cache_usable_for_remote: bool = False
 
     def _session_elf(self) -> object | None:
         if self.session is not None and self.session.elf is not None:
@@ -76,6 +83,21 @@ class ResolveService:
                 libc_elf=libc_elf,
                 source="resolve.bind_defaults",
             )
+
+    def configure_libc_cache(
+        self,
+        *,
+        cache_service: CacheService | None,
+        libc_path: str | None,
+        source: str,
+        trusted: bool,
+        usable_for_remote: bool,
+    ) -> None:
+        self.cache_service = cache_service
+        self.libc_cache_path = libc_path
+        self.libc_cache_source = source
+        self.libc_cache_trusted = bool(trusted)
+        self.libc_cache_usable_for_remote = bool(usable_for_remote)
 
     def _normalize_symbol_name(self, raw_name: str) -> str:
         if self.catalog_service is not None:
@@ -108,7 +130,7 @@ class ResolveService:
                     continue
                 return base_value + self._offset_from_bound_object(libc_elf, table[candidate])
 
-        if normalized == "str_bin_sh":
+        if normalized in {"str_bin_sh", "/bin/sh", "binsh"}:
             search = getattr(libc_elf, "search", None)
             if callable(search):
                 try:
@@ -224,26 +246,72 @@ class ResolveService:
     def symbol(self, name: str) -> int:
         """基于已确认的 libc base 按 mix 模式计算 libc 绝对地址。"""
         base_value = self._read_libc_base()
+        normalized = self._normalize_symbol_query(name)
 
-        resolved = self._resolve_from_bound_libc(name, base_value=base_value)
+        if self._libc_cache_allowed():
+            offset = self._resolve_from_cached_libc_offset(normalized)
+            if offset is not None:
+                return base_value + offset
+
+        resolved = self._resolve_from_bound_libc(normalized, base_value=base_value)
         if resolved is not None:
             return resolved
 
-        if self.catalog_service is None:
-            raise ResolverError(f"无法解析符号 {name}：缺少 catalog_service，且未命中已绑定 libc_elf。")
+        offset = self._resolve_from_catalog(normalized)
+        if offset is not None:
+            return base_value + offset
 
+        if self._libc_cache_allowed():
+            offset = self._materialize_cached_libc_offset(normalized)
+            if offset is not None:
+                return base_value + offset
+
+        raise ResolverError(
+            "No trusted libc source configured; pass libc=..., run search_libc(...), "
+            "or enable auto_local_libc explicitly."
+        )
+
+    def _normalize_symbol_query(self, raw_name: str) -> str:
+        normalized = self._normalize_symbol_name(raw_name)
+        lowered = normalized.strip().lower()
+        if lowered in {"str_bin_sh", "/bin/sh", "binsh"}:
+            return "/bin/sh"
+        return normalized
+
+    def _resolve_from_cached_libc_offset(self, normalized_name: str) -> int | None:
+        if self.cache_service is None or self.libc_cache_path is None:
+            return None
+        return self.cache_service.lookup_libc_offset(self.libc_cache_path, normalized_name)
+
+    def _materialize_cached_libc_offset(self, normalized_name: str) -> int | None:
+        if self.cache_service is None or self.libc_cache_path is None:
+            return None
+        return self.cache_service.materialize_libc_offset(
+            self.libc_cache_path,
+            normalized_name,
+            loader=PWN_ELF,
+        )
+
+    def _resolve_from_catalog(self, normalized_name: str) -> int | None:
+        if self.catalog_service is None:
+            return None
         version_fact = self.registry.get_fact("libc.version")
         if version_fact is None:
-            raise ResolverError(f"无法解析符号 {name}：未命中已绑定 libc_elf，且缺少已确认的 libc.version。")
+            return None
         libc_id = version_fact.metadata.get("libc_id")
         if not isinstance(libc_id, int):
-            raise ResolverError("libc.version 缺少 libc_id 元数据。")
-
+            return None
         try:
-            offset = self.catalog_service.get_offset(libc_id, name)
-        except Exception as exc:
-            raise ResolverError(f"无法解析符号 {name}。") from exc
-        return base_value + offset
+            return int(self.catalog_service.get_offset(libc_id, normalized_name))
+        except Exception:
+            return None
+
+    def _libc_cache_allowed(self) -> bool:
+        if not self.libc_cache_trusted:
+            return False
+        if self.session is not None and self.session.target.kind == "remote":
+            return self.libc_cache_usable_for_remote
+        return True
 
 
 __all__ = ["ResolveService"]

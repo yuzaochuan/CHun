@@ -8,16 +8,18 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 from ..bridges.gdb import PwntoolsGdbBridge
+from ..core.cache import CacheService, default_cache_dir
 from ..core.analysis import CorefileAnalyzer
 from ..core.errors import TransportConfigError
 from ..core.inference import InferenceService
-from ..core.models import RecordDomain, TargetSpec
+from ..core.models import ContextKind, RecordDomain, TargetSpec
 from ..core.registry import EvidenceRegistry
 from ..core.resolve import ResolveService
 from ..transports.pwntools_tube import PwntoolsTubeTransport
 from .constants import DEFAULT_SCRIPT_TERMINAL, HEX_POINTER_RE
 from .fmt import _ScriptFmtFacade
 from .gadget import _ScriptGadgetFacade
+from .lazy import LazyELFProxy
 from .replay import ReplayScriptMixin
 
 if TYPE_CHECKING:
@@ -44,6 +46,9 @@ class ScriptEntry(ReplayScriptMixin):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout: float | None = None,
+        cache: bool = True,
+        cache_dir: str | None = None,
+        auto_local_libc: bool = False,
         log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_SCRIPT_TERMINAL,
     ) -> None:
@@ -63,8 +68,15 @@ class ScriptEntry(ReplayScriptMixin):
         self._target.host = host
         self._target.port = port
         self.timeout = timeout
-        self._elf: Any = None
-        self._libc: Any = None
+        resolved_cache_dir = cache_dir if cache_dir else str(default_cache_dir())
+        self._cache = CacheService(resolved_cache_dir, enabled=cache)
+        self._auto_local_libc = bool(auto_local_libc)
+        self._elf: LazyELFProxy | None = None
+        self._libc: LazyELFProxy | None = None
+        self._libc_source: str = "unresolved"
+        self._libc_trusted: bool = False
+        self._libc_usable_for_remote: bool = False
+        self._libc_path: str | None = None
         self._session: CHunSession | None = None
         self._timing_enabled = True
         self._initialize_script_context()
@@ -81,17 +93,17 @@ class ScriptEntry(ReplayScriptMixin):
         if self.target.binary is None:
             raise TransportConfigError("CHun.script(...) 需要提供 binary。")
 
-        elf_loader = _script_module().ELF
-        elf_start = time.perf_counter()
-        self._elf = elf_loader(self.target.binary, checksec=False)
-        self._emit_timing("script.elf.parse", elf_start, extra=f"path={self.target.binary}")
+        loader = _script_module().ELF
+        prepare_start = time.perf_counter()
+        self._elf = LazyELFProxy(self.target.binary, cache=self._cache, loader=loader)
+        self._emit_timing("script.elf.lazy_prepare", prepare_start, extra=f"path={self.target.binary}")
 
         context_start = time.perf_counter()
         self._set_context_binary(self._elf)
         self._emit_timing("script.context.bind_binary", context_start)
 
         libc_start = time.perf_counter()
-        self._libc = self._load_libc()
+        self._prepare_libc_provider()
         self._emit_timing("script.libc.resolve", libc_start)
         self._emit_timing("script.init_context.total", stage_start)
 
@@ -117,30 +129,121 @@ class ScriptEntry(ReplayScriptMixin):
 
         object.__setattr__(context, "binary", binary)
 
-    def _load_libc(self) -> Any:
-        stage_start = time.perf_counter()
-        elf_loader = _script_module().ELF
-        libc_path = self.target.libc
-        if libc_path is not None:
-            parse_start = time.perf_counter()
-            libc = elf_loader(libc_path, checksec=False)
-            self._emit_timing("script.libc.parse.explicit", parse_start, extra=f"path={libc_path}")
-            self._emit_timing("script.libc.total", stage_start)
-            return libc
+    def _prepare_libc_provider(self) -> None:
+        loader = _script_module().ELF
+        explicit = self.target.libc
+        if isinstance(explicit, str) and explicit:
+            self._libc_path = explicit
+            self._libc = LazyELFProxy(explicit, cache=self._cache, loader=loader)
+            self._libc_source = "specified"
+            self._libc_trusted = True
+            self._libc_usable_for_remote = True
+            return
 
-        try:
-            from_elf_start = time.perf_counter()
-            libc_elf = self.elf.libc
-            self._emit_timing("script.libc.from_elf", from_elf_start)
-        except Exception:
-            self._emit_timing("script.libc.total", stage_start, extra="missing")
+        self._libc = None
+        self._libc_path = None
+        self._libc_source = "unresolved"
+        self._libc_trusted = False
+        self._libc_usable_for_remote = False
+
+    def _try_detect_local_libc(self) -> LazyELFProxy | None:
+        if not self._auto_local_libc:
             return None
+        if self._libc is not None:
+            return self._libc
+        if self._elf is None:
+            return None
+        detect_start = time.perf_counter()
+        try:
+            candidate = self._elf.libc
+        except Exception:
+            self._emit_timing("script.libc.local_detect", detect_start, extra="missing")
+            return None
+        libc_path = getattr(candidate, "path", None)
+        if not isinstance(libc_path, str) or not libc_path:
+            self._emit_timing("script.libc.local_detect", detect_start, extra="missing_path")
+            return None
+        loader = _script_module().ELF
+        self._libc = LazyELFProxy(libc_path, cache=self._cache, loader=loader)
+        self._libc_path = libc_path
+        self._libc_source = "local_detected"
+        self._libc_trusted = True
+        self._libc_usable_for_remote = False
+        self.target.libc = libc_path
+        self._emit_timing("script.libc.local_detect", detect_start, extra=f"path={libc_path}")
+        return self._libc
 
-        libc_path = getattr(libc_elf, "path", None)
-        if isinstance(libc_path, str) and libc_path:
-            self.target.libc = libc_path
-        self._emit_timing("script.libc.total", stage_start, extra=f"path={self.target.libc}")
-        return libc_elf
+    def _prepare_cache_records(self) -> None:
+        if self._elf is None:
+            raise TransportConfigError("脚本 ELF 尚未初始化。")
+        if not self._cache.enabled:
+            self._emit_timing("script.cache.status", time.perf_counter(), extra="disabled")
+            return
+        elf_start = time.perf_counter()
+        elf_hit = self._cache.get_elf_record(self._elf.path) is not None
+        self._elf.ensure_minimal_info()
+        elf_info = self._elf.ensure_minimal_info()
+        self._sync_pwntools_context_from_elf_info(elf_info)
+        self._emit_timing(
+            "script.elf.cache_prepare",
+            elf_start,
+            extra=(
+                f"path={self._elf.path} cache={'hit' if elf_hit else 'miss'} "
+                f"arch={elf_info.get('arch')} bits={elf_info.get('bits')} "
+                f"pie={elf_info.get('pie')} mode={elf_info.get('address_mode')}"
+            ),
+        )
+
+        libc = self.libc
+        if libc is None or self._libc_path is None:
+            self._emit_timing(
+                "script.libc.cache_prepare",
+                time.perf_counter(),
+                extra=f"source={self._libc_source}",
+            )
+            return
+
+        if self._libc_source == "unresolved":
+            self._emit_timing(
+                "script.libc.cache_prepare",
+                time.perf_counter(),
+                extra="source=unresolved",
+            )
+            return
+
+        libc_start = time.perf_counter()
+        libc_hit = self._cache.get_libc_record(self._libc_path) is not None
+        libc_record = self._cache.ensure_libc_record(
+            self._libc_path,
+            loader=_script_module().ELF,
+            source=self._libc_source,  # type: ignore[arg-type]
+            trusted=self._libc_trusted,
+            usable_for_remote=self._libc_usable_for_remote,
+        )
+        self._emit_timing(
+            "script.libc.cache_prepare",
+            libc_start,
+            extra=(
+                f"path={self._libc_path} cache={'hit' if libc_hit else 'miss'} "
+                f"source={libc_record.get('source')} trusted={libc_record.get('trusted')} "
+                f"core_symbols={len(libc_record.get('core_symbols', {}))}"
+            ),
+        )
+
+    @staticmethod
+    def _sync_pwntools_context_from_elf_info(elf_info: dict[str, Any]) -> None:
+        context = _script_module().context
+        bits = elf_info.get("bits")
+        if isinstance(bits, int) and bits > 0:
+            context.bits = int(bits)
+
+        arch = elf_info.get("arch")
+        if isinstance(arch, str) and arch:
+            context.arch = arch
+
+        endian = elf_info.get("endian")
+        if isinstance(endian, str) and endian in {"little", "big"}:
+            context.endian = endian
 
     def _target_for_mode(self) -> TargetSpec:
         args = _script_module().args
@@ -189,11 +292,50 @@ class ScriptEntry(ReplayScriptMixin):
             self._session = self._build_session()
             self._emit_timing("script.start.build_session", build_start)
 
+            cache_start = time.perf_counter()
+            self._prepare_cache_records()
+            self._emit_timing("script.start.cache_prepare", cache_start)
+
             bind_start = time.perf_counter()
             self._session.bind_binaries(elf=self.elf, libc_elf=self.libc)
+            self._bind_cache_contexts(self._session)
+            if hasattr(self._session.resolve, "configure_libc_cache"):
+                self._session.resolve.configure_libc_cache(
+                    cache_service=self._cache,
+                    libc_path=self._libc_path,
+                    source=self._libc_source,
+                    trusted=self._libc_trusted,
+                    usable_for_remote=self._libc_usable_for_remote,
+                )
             self._emit_timing("script.start.bind_binaries", bind_start)
             self._emit_timing("script.start.total", stage_start)
         return self
+
+    def _bind_cache_contexts(self, session: "CHunSession") -> None:
+        setter = getattr(session.rec, "set_context", None)
+        if not callable(setter):
+            return
+        setter(
+            "libc.source",
+            self._libc_source,
+            kind=ContextKind.LIBC,
+            domain=RecordDomain.LIBC,
+            source="script.start",
+        )
+        setter(
+            "libc.trusted_source",
+            bool(self._libc_trusted),
+            kind=ContextKind.LIBC,
+            domain=RecordDomain.LIBC,
+            source="script.start",
+        )
+        setter(
+            "libc.usable_for_remote",
+            bool(self._libc_usable_for_remote),
+            kind=ContextKind.LIBC,
+            domain=RecordDomain.LIBC,
+            source="script.start",
+        )
 
     def gdb(self, script: str = "") -> object | None:
         """在 `GDB` 模式下对本地 process session 执行 attach。"""
@@ -273,12 +415,16 @@ class ScriptEntry(ReplayScriptMixin):
 
     @property
     def elf(self) -> Any:
-        """返回脚本初始化时加载的主程序 `ELF` 对象。"""
+        """返回脚本主程序 lazy ELF 代理。"""
         return self._elf
 
     @property
     def libc(self) -> Any:
-        """返回脚本初始化时解析出的 libc `ELF` 对象。"""
+        """返回当前脚本绑定的 libc lazy ELF 代理。"""
+        if self._libc is not None:
+            return self._libc
+        if self._auto_local_libc:
+            return self._try_detect_local_libc()
         return self._libc
 
     @property

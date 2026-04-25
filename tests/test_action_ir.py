@@ -121,6 +121,29 @@ def test_session_init_transcript_keeps_binary_and_launcher_metadata(tmp_path) ->
     assert session_init.metadata["launcher_kwargs"]["cwd"] == str(tmp_path.resolve())
 
 
+def test_session_init_transcript_keeps_script_cache_kwargs(tmp_path) -> None:
+    source_path = tmp_path / "exp.py"
+    source_path.write_text(
+        "\n".join(
+            [
+                "from chun import CHun",
+                's = CHun.script("./fm", cache=True, cache_dir="./.chun_cache", auto_local_libc=False).start()',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    compiler = build_compiler()
+    ir = compiler.compile_path(source_path, module_name="exp")
+    transcript = compiler.build_module_transcript(ir)
+    session_init = transcript.primitives[1]
+
+    assert session_init.kind == "session_init"
+    assert session_init.metadata["launcher_kwargs"]["cache"] is True
+    assert session_init.metadata["launcher_kwargs"]["cache_dir"] == "./.chun_cache"
+    assert session_init.metadata["launcher_kwargs"]["auto_local_libc"] is False
+
+
 def test_call_classification_keeps_pure_analysis_and_opaque_separate() -> None:
     source = """
 from pwn import flat

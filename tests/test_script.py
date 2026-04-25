@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,6 +13,7 @@ from chun.core.models import FactKind, RecordDomain
 from chun.core.replay import VerificationResult
 from chun.core.registry import EvidenceRegistry
 from chun.core.models import TargetSpec
+from chun.script.gadget import _ScriptGadgetFacade
 import chun.script as script_mod
 
 
@@ -150,7 +152,10 @@ class FakeELF:
 
 
 @pytest.fixture
-def fake_pwntools_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def fake_pwntools_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> dict[str, Any]:
     loaded: list[tuple[str, bool]] = []
     auto_libc = FakeELF("/glibc/libc.so.6")
 
@@ -168,6 +173,9 @@ def fake_pwntools_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         tls["binary"] = None
     monkeypatch.setattr(script_mod.context, "log_level", "info")
     monkeypatch.setattr(script_mod.context, "terminal", [])
+    monkeypatch.setenv("CHUN_CACHE_DIR", str(tmp_path / ".chun_cache"))
+    monkeypatch.delenv("CHUN_NO_CACHE", raising=False)
+    monkeypatch.delenv("CHUN_CLEAR_CACHE", raising=False)
     return {"loaded": loaded, "auto_libc": auto_libc}
 
 
@@ -188,8 +196,8 @@ def test_script_initializes_target_and_runtime_defaults(
     assert entry.target.port == 31337
     assert entry.target.argv == ["./challenge"]
     assert entry.elf.path == "./challenge"
-    assert entry.libc is fake_pwntools_env["auto_libc"]
-    assert entry.target.libc == "/glibc/libc.so.6"
+    assert entry.libc is None
+    assert entry.target.libc is None
     tls = getattr(script_mod.context, "_tls", None)
     if isinstance(tls, dict):
         assert tls.get("binary") is entry.elf
@@ -197,7 +205,7 @@ def test_script_initializes_target_and_runtime_defaults(
         assert getattr(tls, "binary", None) is entry.elf or script_mod.context.binary is entry.elf
     assert script_mod.context.log_level in ("debug", 10)
     assert script_mod.context.terminal == ["tmux", "splitw", "-h"]
-    assert fake_pwntools_env["loaded"] == [("./challenge", False)]
+    assert fake_pwntools_env["loaded"] == []
 
 
 def test_script_start_uses_process_by_default(
@@ -963,10 +971,35 @@ def test_script_uses_explicit_libc_when_provided(
 
     assert entry.libc.path == "./libc.so.6"
     assert entry.target.libc == "./libc.so.6"
-    assert fake_pwntools_env["loaded"] == [
-        ("./challenge", False),
-        ("./libc.so.6", False),
-    ]
+    assert fake_pwntools_env["loaded"] == []
+
+
+def test_script_does_not_auto_detect_local_libc_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+
+    entry = CHun.script("./challenge")
+
+    assert entry.libc is None
+    assert entry.target.libc is None
+
+
+def test_script_auto_local_libc_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+
+    entry = CHun.script("./challenge", auto_local_libc=True)
+
+    libc = entry.libc
+    assert libc is not None
+    assert libc.path == "/glibc/libc.so.6"
+    assert entry.target.libc == "/glibc/libc.so.6"
 
 
 def test_script_start_binds_default_elf_and_libc_to_session(
@@ -1716,7 +1749,7 @@ def test_script_gadget_sugar_parses_register_token_in_order(
     entry = CHun.script("./challenge").start()
 
     assert entry.gadget["rsi_r15"] == 0x401234
-    assert calls == [(entry.elf, ("pop rsi", "pop r15", "ret"))]
+    assert calls == [(entry.elf.materialize_raw(), ("pop rsi", "pop r15", "ret"))]
 
 
 def test_script_gadget_sugar_supports_leave_and_ret(
@@ -1755,6 +1788,66 @@ def test_script_gadget_sugar_supports_leave_and_ret(
     assert calls == [("ret",), ("leave", "ret")]
 
 
+def test_script_gadget_non_pie_offset_result_is_normalized_to_vaddr_and_cached(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+
+    class BaseFakeELF(FakeELF):
+        def __init__(self, path: str, *, libc: Any = None) -> None:
+            super().__init__(path=path, libc=libc)
+            self.address = 0x400000
+            self.pie = False
+            self.nx = True
+            self.canary = False
+            self.relro = "Partial RELRO"
+            self.stripped = False
+            self.static = False
+
+    auto_libc = BaseFakeELF("/glibc/libc.so.6")
+
+    def base_loader(path: str, checksec: bool = False) -> BaseFakeELF:
+        _ = checksec
+        if path == "./challenge":
+            return BaseFakeELF(path, libc=auto_libc)
+        return BaseFakeELF(path)
+
+    class FakeGadget:
+        def __init__(self, address: int) -> None:
+            self.address = address
+
+    class OffsetROP:
+        def __init__(self, _image: object) -> None:
+            pass
+
+        def find_gadget(self, _items: list[str]) -> FakeGadget:
+            # 模拟某些场景下 ROP 返回 offset，而非 vaddr。
+            return FakeGadget(0x1234)
+
+    class BombROP:
+        def __init__(self, _image: object) -> None:
+            raise AssertionError("ROP should not be initialized on gadget cache hit")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ELF", base_loader)
+    monkeypatch.setattr(script_mod, "ROP", OffsetROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+    assert entry.gadget["rdi"] == 0x401234
+
+    monkeypatch.setattr(script_mod, "ROP", BombROP)
+    assert entry.gadget["rdi"] == 0x401234
+
+
 def test_script_gadget_sugar_supports_libc_source_and_runtime_base(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
@@ -1787,10 +1880,10 @@ def test_script_gadget_sugar_supports_libc_source_and_runtime_base(
     monkeypatch.setattr(script_mod, "ROP", FakeROP)
     monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
 
-    entry = CHun.script("./challenge").start()
+    entry = CHun.script("./challenge", libc="./libc.so.6").start()
 
     assert entry.gadget["libc:rdi"] == 0x7F1200001234
-    assert calls == [entry.libc]
+    assert calls == [entry.libc.materialize_raw()]
 
 
 def test_script_gadget_sugar_rejects_invalid_token(
@@ -1821,3 +1914,143 @@ def test_script_gadget_sugar_rejects_invalid_token(
 
     with pytest.raises(ValueError):
         _ = entry.gadget["libc:"]
+
+
+def test_script_gadget_cache_hit_skips_rop_init(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    class BombROP:
+        def __init__(self, _image: object) -> None:
+            raise AssertionError("ROP should not be initialized on cache hit")
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ROP", BombROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+    version = _ScriptGadgetFacade._pwntools_version()
+    entry._cache.set_gadget_query(
+        entry.elf.path,
+        source="elf",
+        token="elf:pop rdi; ret",
+        arch=entry.elf.arch,
+        bits=entry.elf.bits,
+        pwntools_version=version,
+        found=True,
+        value=0x401111,
+        address_mode="vaddr",
+    )
+
+    assert entry.gadget["rdi"] == 0x401111
+
+
+def test_script_gadget_not_found_is_cached(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+    init_count = {"value": 0}
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    class MissROP:
+        def __init__(self, _image: object) -> None:
+            init_count["value"] += 1
+
+        def find_gadget(self, _items: list[str]) -> object | None:
+            return None
+
+    class BombROP:
+        def __init__(self, _image: object) -> None:
+            raise AssertionError("ROP should not be initialized after not-found cache")
+
+        def find_gadget(self, _items: list[str]) -> object | None:
+            return None
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ROP", MissROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+    with pytest.raises(LookupError):
+        _ = entry.gadget["ret"]
+    assert init_count["value"] == 1
+
+    monkeypatch.setattr(script_mod, "ROP", BombROP)
+    with pytest.raises(LookupError):
+        _ = entry.gadget["ret"]
+
+
+def test_script_timing_includes_cache_stages(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    _ = CHun.script("./challenge", libc="./libc.so.6").start()
+    output = capsys.readouterr().out
+
+    assert "script.elf.cache_prepare" in output
+    assert "script.start.cache_prepare" in output
+    assert "script.libc.cache_prepare" in output
+
+
+def test_script_cache_hit_is_faster_than_first_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    class SlowFakeELF(FakeELF):
+        pass
+
+    def slow_loader(path: str, checksec: bool = False) -> SlowFakeELF:
+        _ = checksec
+        time.sleep(0.02)
+        return SlowFakeELF(path=path)
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ELF", slow_loader)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    cache_dir = tmp_path / ".time_cache"
+    first_start = time.perf_counter()
+    _ = CHun.script("./challenge", libc="./libc.so.6", cache_dir=str(cache_dir)).start()
+    first_elapsed = time.perf_counter() - first_start
+
+    second_start = time.perf_counter()
+    _ = CHun.script("./challenge", libc="./libc.so.6", cache_dir=str(cache_dir)).start()
+    second_elapsed = time.perf_counter() - second_start
+
+    assert second_elapsed < first_elapsed * 0.6

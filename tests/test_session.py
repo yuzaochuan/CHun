@@ -106,6 +106,10 @@ def test_session_bind_binaries_syncs_arch_and_binary_context() -> None:
         bits=32,
         little_endian=True,
         arch="i386",
+        pie=True,
+        nx=False,
+        canary=True,
+        relro="Partial RELRO",
     )
     libc_elf = SimpleNamespace(path="./libc.so.6")
 
@@ -116,11 +120,36 @@ def test_session_bind_binaries_syncs_arch_and_binary_context() -> None:
     assert session.rec.get_context("binary.path").value == "./challenge"
     assert session.rec.get_context("binary.arch").value == "i386"
     assert session.rec.get_context("binary.bits").value == 32
+    assert session.rec.get_context("binary.pie").value is True
+    assert session.rec.get_context("binary.nx").value is False
+    assert session.rec.get_context("binary.canary").value is True
+    assert session.rec.get_context("binary.relro").value == "partial"
     assert session.rec.get_context("libc.path").value == "./libc.so.6"
     assert session.rec.get_context("arch.bits").value == 32
     assert session.rec.get_context("arch.pointer_size").value == 4
     assert session.rec.get_context("arch.endian").value == "little"
     assert session.rec.get_context("arch.bits").kind == ContextKind.ENVIRONMENT
+
+
+def test_session_bind_binaries_protection_context_skips_unknown_values() -> None:
+    session = CHunSession(
+        target=TargetSpec(kind="process"),
+        transport_spec=TransportSpec(kind="pwntools-tube"),
+        transport=DummyTransport(),
+    )
+    elf = SimpleNamespace(
+        path="./challenge",
+        bits=64,
+        little_endian=True,
+        arch="amd64",
+    )
+
+    session.bind_binaries(elf=elf, source="script")
+
+    assert session.rec.get_context("binary.pie") is None
+    assert session.rec.get_context("binary.nx") is None
+    assert session.rec.get_context("binary.canary") is None
+    assert session.rec.get_context("binary.relro") is None
 
 
 def test_session_bind_binaries_is_partial_safe() -> None:

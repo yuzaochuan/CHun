@@ -334,6 +334,9 @@ class CHun:
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout: float | None = None,
+        cache: bool = True,
+        cache_dir: str | None = None,
+        auto_local_libc: bool = False,
         log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> ScriptEntry:
@@ -349,6 +352,9 @@ class CHun:
             env=env,
             cwd=cwd,
             timeout=timeout,
+            cache=cache,
+            cache_dir=cache_dir,
+            auto_local_libc=auto_local_libc,
             log_level=log_level,
             terminal=terminal,
         )

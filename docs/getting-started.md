@@ -57,7 +57,7 @@ print(io.recvuntil(b"\n"))
 
 - `context.log_level` / `context.terminal`
 - `t.elf = context.binary`
-- `t.libc`，若未显式传入则尝试从 `t.elf.libc` 自动获取
+- `t.libc`，默认仅在显式传 `libc=...` 时绑定；不再自动从 `t.elf.libc` 获取
 - `t.start()` 返回 `t` 自身，因此既支持分步写法，也支持 `t = CHun.script(...).start()`
 - `t.start()` 后会通过 `session.bind_binaries()` 把 `t.elf` / `t.libc` 绑定到当前 session，并把 `binary.path`、`arch.bits`、`arch.endian`、`arch.pointer_size`、`libc.path` 等规范化信息写进 registry context
 - `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力的显式入口

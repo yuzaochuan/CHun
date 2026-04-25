@@ -140,6 +140,12 @@ class CHunSession:
                 domain=RecordDomain.ELF,
                 source=source,
             )
+            self._sync_binary_protection_context(
+                binary=self.elf,
+                kind=ContextKind.TARGET,
+                domain=RecordDomain.ELF,
+                source=source,
+            )
             self._sync_arch_context(self.elf, source=source)
 
         if self.libc_elf is not None:
@@ -306,6 +312,54 @@ class CHunSession:
                 source=source,
             )
 
+    def _sync_binary_protection_context(
+        self,
+        *,
+        binary: object,
+        kind: ContextKind,
+        domain: RecordDomain,
+        source: str,
+    ) -> None:
+        pie = self._coerce_optional_bool(getattr(binary, "pie", None))
+        if pie is not None:
+            self.registry.set_context(
+                "binary.pie",
+                pie,
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+        nx = self._coerce_optional_bool(getattr(binary, "nx", None))
+        if nx is not None:
+            self.registry.set_context(
+                "binary.nx",
+                nx,
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+        canary = self._coerce_optional_bool(getattr(binary, "canary", None))
+        if canary is not None:
+            self.registry.set_context(
+                "binary.canary",
+                canary,
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
+        relro = self._normalize_relro(getattr(binary, "relro", None))
+        if relro is not None:
+            self.registry.set_context(
+                "binary.relro",
+                relro,
+                kind=kind,
+                domain=domain,
+                source=source,
+            )
+
     def _bind_replay_hook(self) -> None:
         if hasattr(self.transport, "bind_replay_hook"):
             self.transport.bind_replay_hook(self._handle_transport_replay_event)
@@ -355,6 +409,46 @@ class CHunSession:
             normalized = endian.lower()
             if normalized in {"little", "big"}:
                 return normalized
+        return None
+
+    @staticmethod
+    def _coerce_optional_bool(value: object) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in {0, 1}:
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on", "enabled"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "disabled"}:
+                return False
+        return None
+
+    @classmethod
+    def _normalize_relro(cls, value: object) -> str | None:
+        if isinstance(value, str):
+            normalized = value.strip().lower().replace("_", " ").replace("-", " ")
+            if "full" in normalized:
+                return "full"
+            if "partial" in normalized:
+                return "partial"
+            if "none" in normalized or "no relro" in normalized:
+                return "none"
+            return None
+
+        candidate_name = getattr(value, "name", None)
+        if isinstance(candidate_name, str):
+            resolved = cls._normalize_relro(candidate_name)
+            if resolved is not None:
+                return resolved
+
+        candidate_value = getattr(value, "value", None)
+        if isinstance(candidate_value, str):
+            resolved = cls._normalize_relro(candidate_value)
+            if resolved is not None:
+                return resolved
+
         return None
 
 

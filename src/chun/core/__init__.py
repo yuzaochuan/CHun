@@ -1,6 +1,7 @@
 """CHun 核心模块导出。"""
 
 from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
+from .cache import CacheService
 from .analysis import CorefileAnalyzer
 from .catalog import LibcCatalogService
 from .errors import (
@@ -124,6 +125,7 @@ __all__ = [
     "AssignNode",
     "BaseInferenceResult",
     "BridgeError",
+    "CacheService",
     "CHunError",
     "CHunSession",
     "CallNode",

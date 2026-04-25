@@ -42,8 +42,8 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 并在初始化时为脚本态准备：
 
 - `context.log_level` / `context.terminal`
-- `elf`：先构造 `ELF(binary, checksec=False)`，再挂到 `context.binary`
-- `libc`：显式 `ELF(libc, checksec=False)`，或回退到 `elf.libc`
+- `elf`：挂载 cache-aware 的 lazy ELF 代理，并挂到 `context.binary`
+- `libc`：仅当显式传 `libc=...` 时绑定；默认不再回退到 `elf.libc`
 
 注意事项（与当前 pwntools 行为对齐）：
 
@@ -76,6 +76,7 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 
 - 把富对象挂到 `session.elf` / `session.libc_elf`
 - 同步写入规范化标量 context，例如 `binary.path` / `binary.arch` / `arch.bits` / `libc.path`
+- 若 ELF 可提供保护属性，也会同步 `binary.pie` / `binary.nx` / `binary.canary` / `binary.relro`（值分别为 `bool` / `bool` / `bool` / `"none"|"partial"|"full"`）
 
 不会把 ELF / libc ELF 对象本身写入 registry context。
 
@@ -95,7 +96,7 @@ blind = CHun.blind(lambda: CHun.remote("example.com", 31337).raw)
 - `CHun.http(base_url, *, headers=None, timeout=None, follow_redirects=True, verify=True, client_factory=None)`
 - `CHun.websocket(ws_url, *, headers=None, timeout=None, connect_timeout=None, connection_factory=None)`
 - `CHun.blind(connection_factory, *, timeout=None)`
-- `CHun.script(binary, *, host=None, port=None, libc=None, ld=None, argv=None, env=None, cwd=None, timeout=None, log_level="debug", terminal=("tmux", "splitw", "-h", "-d"))`
+- `CHun.script(binary, *, host=None, port=None, libc=None, ld=None, argv=None, env=None, cwd=None, timeout=None, cache=True, cache_dir=None, auto_local_libc=False, log_level="debug", terminal=("tmux", "splitw", "-h", "-d"))`
 
 ## `CHun.script()`
 
@@ -149,6 +150,9 @@ t.gdb("b *main\nc")
 - `t.gadget["ret"]` 语义为 `ret`，`t.gadget["leave"]` 语义为 `leave; ret`
 - `t.gadget["libc:rdi"]` 表示从 libc 镜像查找对应 gadget；不带前缀时默认查 ELF 镜像
 - 脚本层当前会直接打印 `[script-timing]` 耗时日志（ELF/libc 解析、`start()`、`gadget` 解析、`fmt.find_offset()`、`replay()`），用于排查慢点
+- 默认不再自动绑定本机 `elf.libc`：未显式传 `libc=...` 时，`t.libc` 为 unresolved
+- 需要自动探测本机 libc 时，需显式启用 `auto_local_libc=True`
+- `cache=True` 时会启用跨进程 JSON 磁盘缓存；`cache_dir` 可覆盖默认缓存目录
 - `t.replay(payload, checkpoint=...)` 默认把“当前调用位置”当作 checkpoint 回放前缀；传 `checkpoint=` 时按 `[:checkpoint]` 回放
 - `t.replay(action, *args, action_kwargs=...)` 支持函数模式；无需改外部函数签名，语法糖会在 replay 子会话里临时绑定全局 `s`
 - `t.replay(..., expected=...)` 可做命中判断；`capture_replay_registry=True` 回传 replay 子会话 rec 展示到 `result.metadata["replay_registry_lines"]`
@@ -170,6 +174,13 @@ t.gdb("b *main\nc")
 - `ScriptEntry.target` 是脚本入口缓存的基础 `TargetSpec`
 - `ScriptEntry.start()` 在 `REMOTE` 模式下会基于该 target 派生 remote target，再配合 `pwntools-tube` transport 进入统一 session 装配路径
 - `ScriptEntry` 保留的脚本态额外状态只有 `elf`、`libc` 和当前 `session`
+- cache 仅接入 `CHun.script(...)` 路径；workflow launcher 暂未接入（后续可复用同一 `CacheService`）
+
+## Cache 语义
+
+- `CacheService`：跨 exp 进程复用的静态分析事实层（ELF/libc/gadget offsets 与元信息）
+- `session.rec` / `EvidenceRegistry`：单次 exp 会话内事实层（例如 `libc.base` / `elf.base` / leak 观测）
+- `resolve.symbol()` 仍必须基于 `libc.base + offset`，cache 只提供 offset，不直接绕过 runtime base 约束
 
 ## 会话生命周期
 

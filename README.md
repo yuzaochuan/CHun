@@ -69,7 +69,7 @@ print(ws.io.recv_message())
 
 - `context.log_level` / `context.terminal`
 - `t.elf = context.binary = ELF(binary, checksec=False)`
-- `t.libc = ELF(libc, checksec=False)`，未显式传入时会尝试从 `t.elf.libc` 自动拿
+- `t.libc` 默认仅在显式传 `libc=...` 时绑定；如需自动探测本机 libc，需显式 `auto_local_libc=True`
 - `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力会作为显式 facade 暴露
 - `t.sla()` / `t.rl()` / `t.ia()` 等高频 tube 方法和 alias 可直接调用
 - 低频 tube 方法仍可通过 fallback 使用，例如 `t.clean()`
