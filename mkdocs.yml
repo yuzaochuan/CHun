@@ -26,6 +26,7 @@ nav:
   - API:
       - 总览: api/index.md
       - Session: api/tool.md
+      - Cache: api/cache.md
       - Replay: api/replay.md
       - FMT: api/fmt.md
       - Workflow: api/workflow.md

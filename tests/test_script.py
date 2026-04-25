@@ -1788,6 +1788,56 @@ def test_script_gadget_sugar_supports_leave_and_ret(
     assert calls == [("ret",), ("leave", "ret")]
 
 
+def test_script_elf_sym_symbol_symbols_share_cache_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+
+    class RichFakeELF(FakeELF):
+        def __init__(self, path: str, *, libc: Any = None) -> None:
+            super().__init__(path=path, libc=libc)
+            self.address = 0x400000
+            self.pie = False
+            self.nx = True
+            self.canary = False
+            self.relro = "Partial RELRO"
+            self.stripped = False
+            self.static = False
+            self.entry = 0x401000
+            self.symbols = {"main": 0x401080}
+            self.sym = self.symbols
+            self.got = {}
+            self.plt = {}
+            self.sections = {}
+
+    def rich_loader(path: str, checksec: bool = False) -> RichFakeELF:
+        _ = checksec
+        return RichFakeELF(path)
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ELF", rich_loader)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+
+    assert entry.elf.sym["main"] == 0x401080
+    assert entry.elf.symbol["main"] == 0x401080
+    assert entry.elf.symbols["main"] == 0x401080
+
+    record = entry._cache.get_elf_record(entry.elf.path)
+    assert record is not None
+    symbols = record.get("symbols")
+    assert isinstance(symbols, dict)
+    assert symbols.get("main") == 0x401080
+
+
 def test_script_gadget_non_pie_offset_result_is_normalized_to_vaddr_and_cached(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],

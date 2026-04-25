@@ -149,6 +149,7 @@ t.gdb("b *main\nc")
 - `t.gadget["rdi"]` 语义为 `pop rdi; ret`；`t.gadget["rsi_r15"]` 语义为 `pop rsi; pop r15; ret`
 - `t.gadget["ret"]` 语义为 `ret`，`t.gadget["leave"]` 语义为 `leave; ret`
 - `t.gadget["libc:rdi"]` 表示从 libc 镜像查找对应 gadget；不带前缀时默认查 ELF 镜像
+- `t.elf.sym["main"]` / `t.elf.symbol["main"]` / `t.elf.symbols["main"]` 在脚本态都会收敛到同一条 `symbols` cache 记录
 - 脚本层当前会直接打印 `[script-timing]` 耗时日志（ELF/libc 解析、`start()`、`gadget` 解析、`fmt.find_offset()`、`replay()`），用于排查慢点
 - 默认不再自动绑定本机 `elf.libc`：未显式传 `libc=...` 时，`t.libc` 为 unresolved
 - 需要自动探测本机 libc 时，需显式启用 `auto_local_libc=True`
@@ -181,6 +182,7 @@ t.gdb("b *main\nc")
 - `CacheService`：跨 exp 进程复用的静态分析事实层（ELF/libc/gadget offsets 与元信息）
 - `session.rec` / `EvidenceRegistry`：单次 exp 会话内事实层（例如 `libc.base` / `elf.base` / leak 观测）
 - `resolve.symbol()` 仍必须基于 `libc.base + offset`，cache 只提供 offset，不直接绕过 runtime base 约束
+- CLI 可用 `chun cache state <binary-or-libc>` 查看当前文件在 `elf/libc/gadget` 三个 namespace 的缓存命中状态与摘要信息；其中 `elf/gadget` 默认会展开逐项明细，便于核对“哪些键已入缓存”
 
 ## 会话生命周期
 

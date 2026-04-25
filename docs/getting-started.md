@@ -89,6 +89,25 @@ python exp.py REMOTE
 python exp.py REMOTE GDB
 ```
 
+## 查看缓存状态（CLI）
+
+`CHun.script(...)` 的磁盘缓存可以通过 CLI 快速检查：
+
+```bash
+chun cache state ./challenge
+```
+
+可选参数：
+
+- `--cache-dir`：指定缓存目录；默认按 `CHUN_CACHE_DIR -> XDG_CACHE_HOME/chun -> ~/.cache/chun` 解析
+
+输出会按 `elf / libc / gadget` 三个命名空间展示 `hit/miss` 与关键摘要字段（例如 `arch/bits/pie`、`core_symbols`、`gadget queries`）。
+
+其中 `elf` 与 `gadget` 会额外展开明细项：
+
+- `elf.symbols/got/plt/sections`：逐条键值输出（空表显示 `<empty>`）
+- `gadget.query[...]`：逐条输出 `found/value/address_mode`
+
 ## HTTP / WebSocket
 
 ```python
