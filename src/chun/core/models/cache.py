@@ -36,6 +36,9 @@ class ElfCacheRecord(TypedDict, total=False):
     got: dict[str, int]
     plt: dict[str, int]
     sections: dict[str, int]
+    linked_libc_path: str
+    linked_libc_sha256: str
+    linked_libc_source: LibcSource
 
 
 class LibcCacheRecord(TypedDict, total=False):
@@ -51,6 +54,7 @@ class LibcCacheRecord(TypedDict, total=False):
     core_symbols: dict[str, int]
     extra_symbols: dict[str, int]
     strings: dict[str, int]
+    linked_binaries: list[str]
 
 
 class GadgetCacheQueryRecord(TypedDict, total=False):

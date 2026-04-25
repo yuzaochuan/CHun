@@ -6,6 +6,12 @@
 
 详见：[Session API](tool.md)
 
+## `CacheService`
+
+职责：提供跨 exp 进程复用的静态分析缓存层，覆盖 ELF/libc/gadget 的 JSON 持久化与 lazy write-back。
+
+详见：[Cache API](cache.md)
+
 ## `Transport`
 
 职责：统一承接连接生命周期与协议 IO。第一阶段已实现 tube / HTTP / WebSocket / blind reconnect 四类 transport。

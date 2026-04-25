@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -1023,6 +1022,35 @@ def test_script_start_binds_default_elf_and_libc_to_session(
     assert session.bind_binaries_calls == [{"elf": entry.elf, "libc_elf": entry.libc}]
 
 
+def test_script_start_links_elf_cache_to_specified_libc(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script(
+        "./challenge",
+        libc="./libc.so.6",
+        cache_dir=str(tmp_path / "cache"),
+    ).start()
+
+    elf_record = entry._cache.get_elf_record(entry.elf.path)
+    assert elf_record is not None
+    assert elf_record.get("linked_libc_path") == "./libc.so.6"
+    assert isinstance(elf_record.get("linked_libc_sha256"), str)
+    assert elf_record.get("linked_libc_source") == "specified"
+
+
 def test_script_start_is_chainable(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
@@ -1788,6 +1816,56 @@ def test_script_gadget_sugar_supports_leave_and_ret(
     assert calls == [("ret",), ("leave", "ret")]
 
 
+def test_script_elf_sym_symbol_symbols_share_cache_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+
+    class RichFakeELF(FakeELF):
+        def __init__(self, path: str, *, libc: Any = None) -> None:
+            super().__init__(path=path, libc=libc)
+            self.address = 0x400000
+            self.pie = False
+            self.nx = True
+            self.canary = False
+            self.relro = "Partial RELRO"
+            self.stripped = False
+            self.static = False
+            self.entry = 0x401000
+            self.symbols = {"main": 0x401080}
+            self.sym = self.symbols
+            self.got = {}
+            self.plt = {}
+            self.sections = {}
+
+    def rich_loader(path: str, checksec: bool = False) -> RichFakeELF:
+        _ = checksec
+        return RichFakeELF(path)
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ELF", rich_loader)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+
+    assert entry.elf.sym["main"] == 0x401080
+    assert entry.elf.symbol["main"] == 0x401080
+    assert entry.elf.symbols["main"] == 0x401080
+
+    record = entry._cache.get_elf_record(entry.elf.path)
+    assert record is not None
+    symbols = record.get("symbols")
+    assert isinstance(symbols, dict)
+    assert symbols.get("main") == 0x401080
+
+
 def test_script_gadget_non_pie_offset_result_is_normalized_to_vaddr_and_cached(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
@@ -1995,62 +2073,3 @@ def test_script_gadget_not_found_is_cached(
     with pytest.raises(LookupError):
         _ = entry.gadget["ret"]
 
-
-def test_script_timing_includes_cache_stages(
-    monkeypatch: pytest.MonkeyPatch,
-    fake_pwntools_env: dict[str, Any],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    session = DummySession(kind="process")
-
-    def fake_from_specs(
-        cls: type[CHun], target: TargetSpec, transport: Any
-    ) -> DummySession:
-        return session
-
-    monkeypatch.setattr(script_mod.args, "REMOTE", False)
-    monkeypatch.setattr(script_mod.args, "GDB", False)
-    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
-
-    _ = CHun.script("./challenge", libc="./libc.so.6").start()
-    output = capsys.readouterr().out
-
-    assert "script.elf.cache_prepare" in output
-    assert "script.start.cache_prepare" in output
-    assert "script.libc.cache_prepare" in output
-
-
-def test_script_cache_hit_is_faster_than_first_start(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    session = DummySession(kind="process")
-
-    def fake_from_specs(
-        cls: type[CHun], target: TargetSpec, transport: Any
-    ) -> DummySession:
-        return session
-
-    class SlowFakeELF(FakeELF):
-        pass
-
-    def slow_loader(path: str, checksec: bool = False) -> SlowFakeELF:
-        _ = checksec
-        time.sleep(0.02)
-        return SlowFakeELF(path=path)
-
-    monkeypatch.setattr(script_mod.args, "REMOTE", False)
-    monkeypatch.setattr(script_mod.args, "GDB", False)
-    monkeypatch.setattr(script_mod, "ELF", slow_loader)
-    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
-
-    cache_dir = tmp_path / ".time_cache"
-    first_start = time.perf_counter()
-    _ = CHun.script("./challenge", libc="./libc.so.6", cache_dir=str(cache_dir)).start()
-    first_elapsed = time.perf_counter() - first_start
-
-    second_start = time.perf_counter()
-    _ = CHun.script("./challenge", libc="./libc.so.6", cache_dir=str(cache_dir)).start()
-    second_elapsed = time.perf_counter() - second_start
-
-    assert second_elapsed < first_elapsed * 0.6

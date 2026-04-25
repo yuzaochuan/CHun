@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import sys
-import time
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 from ..bridges.gdb import PwntoolsGdbBridge
-from ..core.cache import CacheService, default_cache_dir
 from ..core.analysis import CorefileAnalyzer
+from ..core.cache import CacheService, default_cache_dir
 from ..core.errors import TransportConfigError
 from ..core.inference import InferenceService
 from ..core.models import ContextKind, RecordDomain, TargetSpec
@@ -52,7 +51,6 @@ class ScriptEntry(ReplayScriptMixin):
         log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_SCRIPT_TERMINAL,
     ) -> None:
-        init_start = time.perf_counter()
         self._factory = factory
         resolved_terminal = tuple(terminal) if terminal else DEFAULT_SCRIPT_TERMINAL
         self._target = self._factory._build_process_target(
@@ -78,12 +76,9 @@ class ScriptEntry(ReplayScriptMixin):
         self._libc_usable_for_remote: bool = False
         self._libc_path: str | None = None
         self._session: CHunSession | None = None
-        self._timing_enabled = True
         self._initialize_script_context()
-        self._emit_timing("script.init.total", init_start)
 
     def _initialize_script_context(self) -> None:
-        stage_start = time.perf_counter()
         context = _script_module().context
         log_level = self.target.metadata.get("log_level", "debug")
         terminal = self.target.metadata.get("terminal", list(DEFAULT_SCRIPT_TERMINAL))
@@ -94,18 +89,11 @@ class ScriptEntry(ReplayScriptMixin):
             raise TransportConfigError("CHun.script(...) 需要提供 binary。")
 
         loader = _script_module().ELF
-        prepare_start = time.perf_counter()
         self._elf = LazyELFProxy(self.target.binary, cache=self._cache, loader=loader)
-        self._emit_timing("script.elf.lazy_prepare", prepare_start, extra=f"path={self.target.binary}")
 
-        context_start = time.perf_counter()
         self._set_context_binary(self._elf)
-        self._emit_timing("script.context.bind_binary", context_start)
 
-        libc_start = time.perf_counter()
         self._prepare_libc_provider()
-        self._emit_timing("script.libc.resolve", libc_start)
-        self._emit_timing("script.init_context.total", stage_start)
 
     @staticmethod
     def _set_context_binary(binary: Any) -> None:
@@ -153,15 +141,12 @@ class ScriptEntry(ReplayScriptMixin):
             return self._libc
         if self._elf is None:
             return None
-        detect_start = time.perf_counter()
         try:
             candidate = self._elf.libc
         except Exception:
-            self._emit_timing("script.libc.local_detect", detect_start, extra="missing")
             return None
         libc_path = getattr(candidate, "path", None)
         if not isinstance(libc_path, str) or not libc_path:
-            self._emit_timing("script.libc.local_detect", detect_start, extra="missing_path")
             return None
         loader = _script_module().ELF
         self._libc = LazyELFProxy(libc_path, cache=self._cache, loader=loader)
@@ -170,64 +155,35 @@ class ScriptEntry(ReplayScriptMixin):
         self._libc_trusted = True
         self._libc_usable_for_remote = False
         self.target.libc = libc_path
-        self._emit_timing("script.libc.local_detect", detect_start, extra=f"path={libc_path}")
         return self._libc
 
     def _prepare_cache_records(self) -> None:
         if self._elf is None:
             raise TransportConfigError("脚本 ELF 尚未初始化。")
         if not self._cache.enabled:
-            self._emit_timing("script.cache.status", time.perf_counter(), extra="disabled")
             return
-        elf_start = time.perf_counter()
-        elf_hit = self._cache.get_elf_record(self._elf.path) is not None
         self._elf.ensure_minimal_info()
         elf_info = self._elf.ensure_minimal_info()
         self._sync_pwntools_context_from_elf_info(elf_info)
-        self._emit_timing(
-            "script.elf.cache_prepare",
-            elf_start,
-            extra=(
-                f"path={self._elf.path} cache={'hit' if elf_hit else 'miss'} "
-                f"arch={elf_info.get('arch')} bits={elf_info.get('bits')} "
-                f"pie={elf_info.get('pie')} mode={elf_info.get('address_mode')}"
-            ),
-        )
 
         libc = self.libc
         if libc is None or self._libc_path is None:
-            self._emit_timing(
-                "script.libc.cache_prepare",
-                time.perf_counter(),
-                extra=f"source={self._libc_source}",
-            )
             return
 
         if self._libc_source == "unresolved":
-            self._emit_timing(
-                "script.libc.cache_prepare",
-                time.perf_counter(),
-                extra="source=unresolved",
-            )
             return
 
-        libc_start = time.perf_counter()
-        libc_hit = self._cache.get_libc_record(self._libc_path) is not None
-        libc_record = self._cache.ensure_libc_record(
+        self._cache.ensure_libc_record(
             self._libc_path,
             loader=_script_module().ELF,
             source=self._libc_source,  # type: ignore[arg-type]
             trusted=self._libc_trusted,
             usable_for_remote=self._libc_usable_for_remote,
         )
-        self._emit_timing(
-            "script.libc.cache_prepare",
-            libc_start,
-            extra=(
-                f"path={self._libc_path} cache={'hit' if libc_hit else 'miss'} "
-                f"source={libc_record.get('source')} trusted={libc_record.get('trusted')} "
-                f"core_symbols={len(libc_record.get('core_symbols', {}))}"
-            ),
+        self._cache.bind_elf_libc(
+            self._elf.path,
+            libc_path=self._libc_path,
+            source=self._libc_source,  # type: ignore[arg-type]
         )
 
     @staticmethod
@@ -269,34 +225,20 @@ class ScriptEntry(ReplayScriptMixin):
         return replace(self.target, kind="process")
 
     def _build_session(self) -> "CHunSession":
-        stage_start = time.perf_counter()
-        target_start = time.perf_counter()
         target = self._target_for_mode()
-        self._emit_timing("script.session.target_for_mode", target_start, extra=f"kind={target.kind}")
 
-        transport_start = time.perf_counter()
         transport = self._factory._build_pwntools_tube_transport(timeout=self.timeout)
-        self._emit_timing("script.session.transport_spec", transport_start)
 
-        build_start = time.perf_counter()
         session = self._factory.from_specs(target, transport)
-        self._emit_timing("script.session.from_specs", build_start)
-        self._emit_timing("script.session.build.total", stage_start)
         return session
 
     def start(self) -> "ScriptEntry":
         """启动并缓存当前脚本对应的 `CHunSession`，并返回脚本入口自身。"""
         if self._session is None:
-            stage_start = time.perf_counter()
-            build_start = time.perf_counter()
             self._session = self._build_session()
-            self._emit_timing("script.start.build_session", build_start)
 
-            cache_start = time.perf_counter()
             self._prepare_cache_records()
-            self._emit_timing("script.start.cache_prepare", cache_start)
 
-            bind_start = time.perf_counter()
             self._session.bind_binaries(elf=self.elf, libc_elf=self.libc)
             self._bind_cache_contexts(self._session)
             if hasattr(self._session.resolve, "configure_libc_cache"):
@@ -307,8 +249,6 @@ class ScriptEntry(ReplayScriptMixin):
                     trusted=self._libc_trusted,
                     usable_for_remote=self._libc_usable_for_remote,
                 )
-            self._emit_timing("script.start.bind_binaries", bind_start)
-            self._emit_timing("script.start.total", stage_start)
         return self
 
     def _bind_cache_contexts(self, session: "CHunSession") -> None:
@@ -373,7 +313,6 @@ class ScriptEntry(ReplayScriptMixin):
                 raise TransportConfigError("process 模式至少需要 binary 或 argv。")
             argv = [session.target.binary]
 
-        debug_start = time.perf_counter()
         debug_tube = script_mod.gdb.debug(
             argv,
             gdbscript=script or None,
@@ -386,15 +325,7 @@ class ScriptEntry(ReplayScriptMixin):
         session.dbg.bind_runtime(controller=getattr(debug_tube, "gdb", None))
         if hasattr(session, "_sync_transport_context"):
             session._sync_transport_context()
-        self._emit_timing("script.debug.spawn_and_bind", debug_start)
         return self
-
-    def _emit_timing(self, stage: str, start: float, *, extra: str | None = None) -> None:
-        if not getattr(self, "_timing_enabled", False):
-            return
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        suffix = f" | {extra}" if extra else ""
-        print(f"[script-timing] {stage}: {elapsed_ms:.3f} ms{suffix}", flush=True)
 
     @property
     def session(self) -> "CHunSession":
@@ -472,7 +403,9 @@ class ScriptEntry(ReplayScriptMixin):
         """访问脚本态 gadget 语法糖，支持 `s.gadget[\"rdi\"]`。"""
         return _ScriptGadgetFacade(self)
 
-    def checkpoint(self, name: str, *, metadata: dict[str, object] | None = None) -> object:
+    def checkpoint(
+        self, name: str, *, metadata: dict[str, object] | None = None
+    ) -> object:
         """在 replay trace 中打一个手工检查点。"""
         return self.session.checkpoint(name, metadata=metadata or {})
 

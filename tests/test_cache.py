@@ -136,3 +136,34 @@ def test_elf_cache_address_mode_uses_vaddr_for_non_pie(tmp_path: Path) -> None:
     cache = CacheService(root=tmp_path / "cache")
     record = cache.ensure_elf_record(binary_path, _fake_loader)
     assert record["address_mode"] == "vaddr"
+
+
+def test_bind_elf_libc_writes_link_metadata(tmp_path: Path) -> None:
+    binary_path = tmp_path / "chall"
+    libc_path = tmp_path / "libc.so.6"
+    binary_path.write_bytes(b"fake-binary")
+    libc_path.write_bytes(b"fake-libc")
+    cache = CacheService(root=tmp_path / "cache")
+
+    _ = cache.ensure_elf_record(binary_path, _fake_loader)
+    _ = cache.ensure_libc_record(
+        libc_path,
+        loader=_fake_loader,
+        source="specified",
+        trusted=True,
+        usable_for_remote=True,
+    )
+    cache.bind_elf_libc(
+        binary_path,
+        libc_path=libc_path,
+        source="specified",
+    )
+
+    elf_record = cache.get_elf_record(binary_path)
+    libc_record = cache.get_libc_record(libc_path)
+    assert elf_record is not None
+    assert libc_record is not None
+    assert elf_record.get("linked_libc_path") == str(libc_path)
+    assert elf_record.get("linked_libc_sha256") == file_sha256(libc_path)
+    assert elf_record.get("linked_libc_source") == "specified"
+    assert file_sha256(binary_path) in libc_record.get("linked_binaries", [])

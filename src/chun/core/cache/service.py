@@ -136,6 +136,39 @@ class CacheService:
             usable_for_remote=usable_for_remote,
         )
 
+    def bind_elf_libc(
+        self,
+        elf_path: str | Path,
+        *,
+        libc_path: str | Path,
+        source: LibcSource,
+    ) -> None:
+        elf_record = self.get_elf_record(elf_path)
+        libc_record = self.get_libc_record(libc_path)
+        if elf_record is None or libc_record is None:
+            return
+
+        libc_sha = cast(str, libc_record.get("sha256", ""))
+        if not libc_sha:
+            libc_sha = file_sha256(libc_path)
+        elf_record["linked_libc_path"] = str(libc_path)
+        elf_record["linked_libc_sha256"] = libc_sha
+        elf_record["linked_libc_source"] = source
+        self._write_elf_record(elf_path, elf_record)
+
+        binary_sha = cast(str, elf_record.get("sha256", ""))
+        if not binary_sha:
+            binary_sha = file_sha256(elf_path)
+        raw_linked = libc_record.get("linked_binaries")
+        if isinstance(raw_linked, list):
+            linked = [item for item in raw_linked if isinstance(item, str)]
+        else:
+            linked = []
+        if binary_sha not in linked:
+            linked.append(binary_sha)
+            libc_record["linked_binaries"] = linked
+            self._write_libc_record(libc_path, libc_record)
+
     def lookup_libc_offset(self, path: str | Path, symbol: str) -> int | None:
         record = self.get_libc_record(path)
         if record is None:

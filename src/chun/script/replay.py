@@ -152,7 +152,6 @@ class ReplayScriptMixin:
         replay_registry_limit: int | None = None,
     ) -> object:
         """脚本态 replay 语法糖：默认按“当前位置前缀”回放，再注入 payload 或执行 action。"""
-        stage_start = time.perf_counter()
         _ = probe_dispatch
         if checkpoint is None:
             end_seq_exclusive = self.rec.replay.cursor_seq
@@ -184,7 +183,6 @@ class ReplayScriptMixin:
                 replay_registry_detail=replay_registry_detail,
                 replay_registry_limit=replay_registry_limit,
             )
-            self._emit_timing("script.replay.payload.total", stage_start)
             return result
 
         if not callable(payload_or_action):
@@ -209,7 +207,6 @@ class ReplayScriptMixin:
             replay_registry_detail=replay_registry_detail,
             replay_registry_limit=replay_registry_limit,
         )
-        self._emit_timing("script.replay.action.total", stage_start)
         return result
 
     def _run_replay_action(
@@ -226,7 +223,6 @@ class ReplayScriptMixin:
         replay_registry_detail: Literal["compact", "standard", "verbose"],
         replay_registry_limit: int | None,
     ) -> VerificationResult:
-        stage_start = time.perf_counter()
         context = _script_module().context
         previous_log_level = getattr(context, "log_level", None)
         replay_session = self.session.make_replay_session()
@@ -272,7 +268,6 @@ class ReplayScriptMixin:
                 metadata=metadata,
             )
         finally:
-            self._emit_timing("script.replay._run_replay_action.total", stage_start)
             if isinstance(globals_dict, dict):
                 if had_global_s:
                     globals_dict["s"] = old_global_s
@@ -283,11 +278,6 @@ class ReplayScriptMixin:
             finally:
                 if previous_log_level is not None:
                     context.log_level = previous_log_level
-
-    def _emit_timing(self, stage: str, start: float, *, extra: str | None = None) -> None:
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        suffix = f" | {extra}" if extra else ""
-        print(f"[script-timing] {stage}: {elapsed_ms:.3f} ms{suffix}", flush=True)
 
     def _replay_trace_events(
         self,

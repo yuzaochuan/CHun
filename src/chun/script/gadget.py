@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import sys
-import time
 from dataclasses import dataclass
 from typing import Any, Literal, Sequence
 
@@ -42,24 +41,13 @@ class _ScriptGadgetFacade:
 
     def get(self, token: str, *, index: int = 0) -> int:
         """按 token 语义查找 gadget 地址，可通过 `index` 选择候选。"""
-        stage_start = time.perf_counter()
         if index != 0:
             raise ValueError("当前版本仅支持 index=0。")
-        parse_start = time.perf_counter()
         parsed = self._parse_token(token)
-        self._emit_timing("script.gadget.parse_token", parse_start, extra=f"token={token}")
 
-        select_start = time.perf_counter()
         image = self._select_image(parsed.source)
-        self._emit_timing(
-            "script.gadget.select_image",
-            select_start,
-            extra=f"source={parsed.source}",
-        )
 
-        cache_lookup_start = time.perf_counter()
         cached = self._lookup_cached_gadget(parsed=parsed, image=image)
-        self._emit_timing("script.gadget.cache_lookup", cache_lookup_start)
         if cached is not None:
             found, cached_value, address_mode = cached
             if not found:
@@ -76,16 +64,9 @@ class _ScriptGadgetFacade:
                 )
             else:
                 resolved = self._normalize_vaddr_if_needed(image=image, value=int(cached_value))
-            self._emit_timing("script.gadget.total", stage_start, extra=f"token={token}")
             return resolved
 
-        find_start = time.perf_counter()
         gadget = self._find_gadget(parsed=parsed, image=image, instructions=parsed.instructions)
-        self._emit_timing(
-            "script.gadget.find",
-            find_start,
-            extra=f"ins={'; '.join(parsed.instructions)}",
-        )
 
         mode = self._address_mode(source=parsed.source, image=image)
         stored_value = self._canonicalize_cached_value(
@@ -101,14 +82,11 @@ class _ScriptGadgetFacade:
             address_mode=mode,
         )
 
-        resolve_start = time.perf_counter()
         resolved = self._resolve_runtime_address(
             source=parsed.source,
             image=image,
             gadget_address=int(gadget.address),
         )
-        self._emit_timing("script.gadget.resolve_addr", resolve_start)
-        self._emit_timing("script.gadget.total", stage_start, extra=f"token={token}")
         return resolved
 
     @staticmethod
@@ -162,13 +140,9 @@ class _ScriptGadgetFacade:
     ) -> Any:
         rop_builder = _script_module().ROP
         rop_image = self._materialize_rop_image(image)
-        rop_init_start = time.perf_counter()
         rop = rop_builder(rop_image)
-        self._emit_timing("script.gadget.rop_init", rop_init_start)
 
-        find_start = time.perf_counter()
         gadget = rop.find_gadget(list(instructions))
-        self._emit_timing("script.gadget.rop_find_gadget", find_start)
         if gadget is None:
             joined = "; ".join(instructions)
             self._write_cached_gadget(
@@ -220,15 +194,6 @@ class _ScriptGadgetFacade:
         if isinstance(value, int) and value > 0:
             return int(value)
         return None
-
-    def _emit_timing(self, stage: str, start: float, *, extra: str | None = None) -> None:
-        emit = getattr(self._entry, "_emit_timing", None)
-        if callable(emit):
-            emit(stage, start, extra=extra)
-            return
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        suffix = f" | {extra}" if extra else ""
-        print(f"[script-timing] {stage}: {elapsed_ms:.3f} ms{suffix}", flush=True)
 
     @staticmethod
     def _materialize_rop_image(image: object) -> object:

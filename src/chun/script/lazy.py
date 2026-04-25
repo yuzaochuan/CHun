@@ -85,6 +85,16 @@ class LazyELFProxy:
         return self._symbols
 
     @property
+    def sym(self) -> Mapping[str, int]:
+        """兼容 pwntools 常用简写：`elf.sym[...]`。"""
+        return self._symbols
+
+    @property
+    def symbol(self) -> Mapping[str, int]:
+        """兼容语义化别名：`elf.symbol[...]`。"""
+        return self._symbols
+
+    @property
     def got(self) -> Mapping[str, int]:
         return self._got
 

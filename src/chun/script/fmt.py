@@ -271,7 +271,6 @@ class _ScriptFmtFacade:
         source: str = "fmt.probe",
     ) -> FmtOffsetProbeResult:
         """探测 fmt offset，默认开启日志便于手写 exp 调试。"""
-        stage_start = time.perf_counter()
         kwargs: dict[str, Any] = {"loginfo": loginfo}
         if mode != FmtOffsetProbeMode.SEQUENTIAL:
             kwargs["mode"] = mode
@@ -299,13 +298,7 @@ class _ScriptFmtFacade:
             kwargs["verify_loginfo"] = verify_loginfo
         if source != "fmt.probe":
             kwargs["source"] = source
-        result = self._service.find_offset(**kwargs)
-        _emit_script_timing(
-            "script.fmt.find_offset.total",
-            stage_start,
-            extra=f"verify={verify} store={store}",
-        )
-        return result
+        return self._service.find_offset(**kwargs)
 
     def write(
         self,
@@ -722,8 +715,3 @@ def _pad_time_for_max_padding(max_pad: int) -> str:
         return "HIGH"
     return "EXTREME"
 
-
-def _emit_script_timing(stage: str, start: float, *, extra: str | None = None) -> None:
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    suffix = f" | {extra}" if extra else ""
-    print(f"[script-timing] {stage}: {elapsed_ms:.3f} ms{suffix}", flush=True)
