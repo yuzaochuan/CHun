@@ -173,6 +173,10 @@ t.gdb("b *main\nc")
 
 - `CHun.process()` / `CHun.remote()` / `CHun.ssh_process()` / `CHun.http()` / `CHun.websocket()` / `CHun.blind()` 在内部都先落到同一套私有 `TargetSpec` / `TransportSpec` builder
 - `CHun.script()` 也不再单独拼装 transport，而是复用相同 builder，再统一走 `from_specs()`
+- 顶层包 `chun` 对公共导出采用 lazy export；`from chun import CHun` 不会在导入时立刻初始化完整 core/script/workflow 栈
+- `chun.core` / `chun.script` / `chun.transports` 这些包级导出同样改成 lazy export；单独导入 `CHunSession` 或 `ScriptEntry` 时，不再因为包 `__init__` 提前拉起整套 runtime
+- `CHunSession` 上的 `dbg` / `gdb_mi` / `crash` / `fmt` 改为首次访问时再实例化；导入 session 本身不会自动初始化 GDB bridge、corefile analyzer 或 fmt 服务
+- `chun._compat` 现已拆成“轻代理 + 重对象懒加载”：`args/context/log/gdb` 在导入期不会触发 pwntools，`ELF/ROP/DynELF/Corefile/process/remote/...` 则在首次真正使用时才加载
 - 脚本态实现已从单文件 `src/chun/script.py` 拆分为 `src/chun/script/` 包（`entry.py` / `replay.py` / `fmt.py` / `constants.py`）；对外 API 与导入路径保持不变
 - `ScriptEntry.target` 是脚本入口缓存的基础 `TargetSpec`
 - `ScriptEntry.start()` 在 `REMOTE` 模式下会基于该 target 派生 remote target，再配合 `pwntools-tube` transport 进入统一 session 装配路径

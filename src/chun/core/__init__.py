@@ -1,121 +1,56 @@
 """CHun 核心模块导出。"""
 
-from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
-from .cache import CacheService
-from .analysis import CorefileAnalyzer
-from .catalog import LibcCatalogService
-from .errors import (
-    BridgeError,
-    CHunError,
-    CrashAnalysisError,
-    DebuggerBridgeError,
-    InferenceError,
-    InferenceInputError,
-    MissingDependencyError,
-    RegistryConflictError,
-    RegistryError,
-    RegistryNotFoundError,
-    ResolverError,
-    TransportCapabilityError,
-    TransportClosedError,
-    TransportConfigError,
-    TransportError,
-)
-from .inference import InferenceService
-from .models import (
-    AddressLike,
-    AnalysisNode,
-    Artifact,
-    ArtifactKind,
-    AssignNode,
-    BaseInferenceResult,
-    CallNode,
-    ContextEntry,
-    ContextKind,
-    CrashAnalysisResult,
-    ExpActionIR,
-    ExprNode,
-    Fact,
-    FactKind,
-    FmtEndian,
-    FmtExecutionMethod,
-    FmtExecutionResult,
-    FmtExecutionReceipt,
-    FmtWriteCandidate,
-    FmtWriteComparison,
-    FmtWritesComparison,
-    FmtLayoutPolicy,
-    FmtLeak,
-    FmtOffset,
-    FmtOffsetProbeMode,
-    FmtOffsetProbeResult,
-    FmtReadMode,
-    FmtRenderSpecifier,
-    FmtRenderStep,
-    FmtResultKind,
-    FmtTargetOrigin,
-    FmtTargetRef,
-    FmtTaskPolicy,
-    FmtValueOrigin,
-    FmtValueRef,
-    FmtWordSize,
-    FmtWriteAtom,
-    FmtWritePlan,
-    FmtWriteRequest,
-    FmtWriteStrategy,
-    FmtWriteTask,
-    FunctionActionDef,
-    GdbMiResult,
-    ImportModel,
-    ImportRef,
-    LiteralNode,
-    NameRefNode,
-    Observation,
-    ObservationKind,
-    OpaqueCallNode,
-    PrimitiveNode,
-    RecordDomain,
-    RecursiveCallNode,
-    RenderedFmtTask,
-    ResolvedSymbolResult,
-    SourceSpan,
-    TargetKind,
-    TargetSpec,
-    TopLevelBlockDef,
-    TransportKind,
-    TransportSpec,
-    ValueLike,
-    WorkflowCheckpoint,
-    WorkflowExecutionResult,
-    WorkflowPrimitive,
-    WorkflowPrimitiveKind,
-    WorkflowStepReceipt,
-    WorkflowTranscript,
-)
-from .registry import EvidenceRegistry
-from .replay import (
-    InMemoryBlobStore,
-    PayloadRef,
-    ReplayCheckpoint,
-    ReplayEvent,
-    ReplayEventKind,
-    ReplayExecutor,
-    ReplayRecorder,
-    VerificationResult,
-    VerificationRun,
-)
-from .resolve import DynELFResolver, ResolveService
-from .session import CHunSession
-from .workflow import (
-    ExploitWorkflowCompiler,
-    ProcessLauncher,
-    ProcessWorkflowRuntime,
-    WorkflowExecutor,
-    WorkflowJsonCodec,
-    WorkflowLauncher,
-    WorkflowRuntime,
-    WorkflowTranslatorRegistry,
-)
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
+_BRIDGE_EXPORTS = {"GdbMiBridge", "PwntoolsGdbBridge"}
+_CACHE_EXPORTS = {"CacheService"}
+_ANALYSIS_EXPORTS = {"CorefileAnalyzer"}
+_CATALOG_EXPORTS = {"LibcCatalogService"}
+_ERROR_EXPORTS = {
+    "BridgeError",
+    "CHunError",
+    "CrashAnalysisError",
+    "DebuggerBridgeError",
+    "InferenceError",
+    "InferenceInputError",
+    "MissingDependencyError",
+    "RegistryConflictError",
+    "RegistryError",
+    "RegistryNotFoundError",
+    "ResolverError",
+    "TransportCapabilityError",
+    "TransportClosedError",
+    "TransportConfigError",
+    "TransportError",
+}
+_INFERENCE_EXPORTS = {"InferenceService"}
+_REGISTRY_EXPORTS = {"EvidenceRegistry"}
+_REPLAY_EXPORTS = {
+    "InMemoryBlobStore",
+    "PayloadRef",
+    "ReplayCheckpoint",
+    "ReplayEvent",
+    "ReplayEventKind",
+    "ReplayExecutor",
+    "ReplayRecorder",
+    "VerificationResult",
+    "VerificationRun",
+}
+_RESOLVE_EXPORTS = {"DynELFResolver", "ResolveService"}
+_SESSION_EXPORTS = {"CHunSession"}
+_WORKFLOW_EXPORTS = {
+    "ExploitWorkflowCompiler",
+    "ProcessLauncher",
+    "ProcessWorkflowRuntime",
+    "WorkflowExecutor",
+    "WorkflowJsonCodec",
+    "WorkflowLauncher",
+    "WorkflowRuntime",
+    "WorkflowTranslatorRegistry",
+}
 
 __all__ = [
     "AddressLike",
@@ -229,3 +164,35 @@ __all__ = [
     "VerificationRun",
     "InMemoryBlobStore",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name in _BRIDGE_EXPORTS:
+        return getattr(import_module("..bridges.gdb", __name__), name)
+    if name in _CACHE_EXPORTS:
+        return getattr(import_module(".cache", __name__), name)
+    if name in _ANALYSIS_EXPORTS:
+        return getattr(import_module(".analysis", __name__), name)
+    if name in _CATALOG_EXPORTS:
+        return getattr(import_module(".catalog", __name__), name)
+    if name in _ERROR_EXPORTS:
+        return getattr(import_module(".errors", __name__), name)
+    if name in _INFERENCE_EXPORTS:
+        return getattr(import_module(".inference", __name__), name)
+    if name in _REGISTRY_EXPORTS:
+        return getattr(import_module(".registry", __name__), name)
+    if name in _REPLAY_EXPORTS:
+        return getattr(import_module(".replay", __name__), name)
+    if name in _RESOLVE_EXPORTS:
+        return getattr(import_module(".resolve", __name__), name)
+    if name in _SESSION_EXPORTS:
+        return getattr(import_module(".session", __name__), name)
+    if name in _WORKFLOW_EXPORTS:
+        return getattr(import_module(".workflow", __name__), name)
+    if name in __all__:
+        return getattr(import_module(".models", __name__), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

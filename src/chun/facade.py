@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Callable, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
-from .core.models import TargetSpec, TransportSpec
-from .core.session import CHunSession
-from .script import DEFAULT_SCRIPT_TERMINAL, ScriptEntry
-from .transports import build_transport
+if TYPE_CHECKING:
+    from .core.models import TargetSpec, TransportSpec
+    from .core.session import CHunSession
+    from .script import ScriptEntry
 
-DEFAULT_TERMINAL: tuple[str, ...] = DEFAULT_SCRIPT_TERMINAL
+DEFAULT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h")
 
 
 class CHun:
@@ -34,6 +34,8 @@ class CHun:
         log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> TargetSpec:
+        from .core.models import TargetSpec
+
         return TargetSpec(
             kind="process",
             binary=binary,
@@ -59,6 +61,8 @@ class CHun:
         log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> TargetSpec:
+        from .core.models import TargetSpec
+
         return TargetSpec(
             kind="remote",
             binary=binary,
@@ -88,6 +92,8 @@ class CHun:
         log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> TargetSpec:
+        from .core.models import TargetSpec
+
         return TargetSpec(
             kind="ssh",
             binary=binary,
@@ -108,20 +114,28 @@ class CHun:
 
     @staticmethod
     def _build_http_target(base_url: str) -> TargetSpec:
+        from .core.models import TargetSpec
+
         return TargetSpec(kind="http", base_url=base_url)
 
     @staticmethod
     def _build_websocket_target(ws_url: str) -> TargetSpec:
+        from .core.models import TargetSpec
+
         return TargetSpec(kind="websocket", ws_url=ws_url)
 
     @staticmethod
     def _build_blind_target() -> TargetSpec:
+        from .core.models import TargetSpec
+
         return TargetSpec(kind="blind")
 
     @staticmethod
     def _build_pwntools_tube_transport(
         *, timeout: float | None = None
     ) -> TransportSpec:
+        from .core.models import TransportSpec
+
         return TransportSpec(kind="pwntools-tube", timeout=timeout)
 
     @staticmethod
@@ -133,6 +147,8 @@ class CHun:
         verify: bool = True,
         client_factory: Callable[[TargetSpec, TransportSpec], object] | None = None,
     ) -> TransportSpec:
+        from .core.models import TransportSpec
+
         metadata: dict[str, object] = {}
         if client_factory is not None:
             metadata["client_factory"] = client_factory
@@ -153,6 +169,8 @@ class CHun:
         connect_timeout: float | None = None,
         connection_factory: Callable[[TargetSpec, TransportSpec], object] | None = None,
     ) -> TransportSpec:
+        from .core.models import TransportSpec
+
         metadata: dict[str, object] = {}
         if connection_factory is not None:
             metadata["connection_factory"] = connection_factory
@@ -170,6 +188,8 @@ class CHun:
         *,
         timeout: float | None = None,
     ) -> TransportSpec:
+        from .core.models import TransportSpec
+
         return TransportSpec(
             kind="blind-reconnect",
             timeout=timeout,
@@ -178,6 +198,9 @@ class CHun:
 
     @classmethod
     def from_specs(cls, target: TargetSpec, transport: TransportSpec) -> CHunSession:
+        from .core.session import CHunSession
+        from .transports import build_transport
+
         return CHunSession(
             target=target,
             transport_spec=transport,
@@ -340,6 +363,8 @@ class CHun:
         log_level: str = "debug",
         terminal: Sequence[str] = DEFAULT_TERMINAL,
     ) -> ScriptEntry:
+        from .script.entry import ScriptEntry
+
         """返回面向手写 exp 的薄 facade。"""
         return ScriptEntry(
             cls,

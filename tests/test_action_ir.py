@@ -289,6 +289,26 @@ def fire():
     assert isinstance(send.metadata["payload_expr"], ExprNode)
 
 
+def test_transcript_send_uses_stable_pwntools_defaults_under_mutated_context() -> None:
+    from pwn import context
+
+    source = """
+from pwn import flat
+
+def fire():
+    s.sendline(flat(0x41414141, b"BC"))
+"""
+
+    with context.local(bits=64):
+        compiler = build_compiler()
+        ir = compiler.compile_source(source, module_name="exp")
+        transcript = compiler.build_transcript(ir, "exp.fire")
+
+    send = transcript.primitives[1]
+    assert send.kind == "sendline"
+    assert send.payload == b"AAAABC"
+
+
 def test_transcript_inlines_local_helper_return_for_sendlineafter_payload() -> None:
     source = """
 def itob(num):

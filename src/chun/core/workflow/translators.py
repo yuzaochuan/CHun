@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Mapping, Sequence
 
+from pwnlib.context import context as pwn_context
 from pwnlib.util.cyclic import cyclic
 from pwnlib.util.packing import flat, p8, p16, p32, p64, u8, u16, u32, u64
 
@@ -17,6 +18,9 @@ TranslatorEffect = Literal[
     "expandable_macro",
     "opaque",
 ]
+
+_DEFAULT_PWN_BITS = int(getattr(pwn_context, "bits", 32))
+_DEFAULT_PWN_ENDIAN = str(getattr(pwn_context, "endian", "little"))
 
 
 @dataclass(slots=True, frozen=True)
@@ -81,60 +85,61 @@ class PureExprTranslator(BaseCallTranslator):
         resolved_args = tuple(self._unwrap_value(arg) for arg in args)
         resolved_kwargs = {key: self._unwrap_value(value) for key, value in keywords.items()}
         try:
-            if callee in {"str", "builtins.str"} and resolved_args:
-                value = str(resolved_args[0])
-                return True, value, "str", {"preview": value[:64], "length": len(value)}
-            if callee in {"int", "builtins.int"} and resolved_args:
-                value = int(resolved_args[0])
-                return True, value, "int", {"preview": str(value)}
-            if callee in {"bytes", "builtins.bytes"} and resolved_args:
-                value = bytes(resolved_args[0])
-                return True, value, "bytes", self._bytes_summary(value)
-            if callee in {"flat", "pwn.flat"}:
-                value = flat(*resolved_args, **resolved_kwargs)
-                return True, value, "bytes", self._bytes_summary(value)
-            if callee == "cyclic":
-                value = cyclic(*resolved_args, **resolved_kwargs)
-                return True, value, "bytes", self._bytes_summary(value)
-            if callee == "p8" and resolved_args:
-                value = p8(int(resolved_args[0]))
-                return True, value, "bytes", self._bytes_summary(value)
-            if callee == "p16" and resolved_args:
-                value = p16(int(resolved_args[0]))
-                return True, value, "bytes", self._bytes_summary(value)
-            if callee == "p32" and resolved_args:
-                value = p32(int(resolved_args[0]))
-                return True, value, "bytes", self._bytes_summary(value)
-            if callee == "p64" and resolved_args:
-                value = p64(int(resolved_args[0]))
-                return True, value, "bytes", self._bytes_summary(value)
-            if callee == "u8" and resolved_args:
-                value = u8(bytes(resolved_args[0]))
-                return True, int(value), "int", {"preview": str(int(value))}
-            if callee == "u16" and resolved_args:
-                value = u16(bytes(resolved_args[0]))
-                return True, int(value), "int", {"preview": str(int(value))}
-            if callee == "u32" and resolved_args:
-                value = u32(bytes(resolved_args[0]))
-                return True, int(value), "int", {"preview": str(int(value))}
-            if callee == "u64" and resolved_args:
-                value = u64(bytes(resolved_args[0]))
-                return True, int(value), "int", {"preview": str(int(value))}
-            if callee.endswith(".encode"):
-                receiver = resolved_args[0] if resolved_args else self._receiver_value(callee, args)
-                if isinstance(receiver, str):
-                    encoding = (
-                        str(resolved_args[1])
-                        if len(resolved_args) > 1
-                        else str(resolved_kwargs.get("encoding", "utf-8"))
-                    )
-                    errors = (
-                        str(resolved_args[2])
-                        if len(resolved_args) > 2
-                        else str(resolved_kwargs.get("errors", "strict"))
-                    )
-                    value = receiver.encode(encoding, errors)
+            with pwn_context.local(bits=_DEFAULT_PWN_BITS, endian=_DEFAULT_PWN_ENDIAN):
+                if callee in {"str", "builtins.str"} and resolved_args:
+                    value = str(resolved_args[0])
+                    return True, value, "str", {"preview": value[:64], "length": len(value)}
+                if callee in {"int", "builtins.int"} and resolved_args:
+                    value = int(resolved_args[0])
+                    return True, value, "int", {"preview": str(value)}
+                if callee in {"bytes", "builtins.bytes"} and resolved_args:
+                    value = bytes(resolved_args[0])
                     return True, value, "bytes", self._bytes_summary(value)
+                if callee in {"flat", "pwn.flat"}:
+                    value = flat(*resolved_args, **resolved_kwargs)
+                    return True, value, "bytes", self._bytes_summary(value)
+                if callee == "cyclic":
+                    value = cyclic(*resolved_args, **resolved_kwargs)
+                    return True, value, "bytes", self._bytes_summary(value)
+                if callee == "p8" and resolved_args:
+                    value = p8(int(resolved_args[0]))
+                    return True, value, "bytes", self._bytes_summary(value)
+                if callee == "p16" and resolved_args:
+                    value = p16(int(resolved_args[0]))
+                    return True, value, "bytes", self._bytes_summary(value)
+                if callee == "p32" and resolved_args:
+                    value = p32(int(resolved_args[0]))
+                    return True, value, "bytes", self._bytes_summary(value)
+                if callee == "p64" and resolved_args:
+                    value = p64(int(resolved_args[0]))
+                    return True, value, "bytes", self._bytes_summary(value)
+                if callee == "u8" and resolved_args:
+                    value = u8(bytes(resolved_args[0]))
+                    return True, int(value), "int", {"preview": str(int(value))}
+                if callee == "u16" and resolved_args:
+                    value = u16(bytes(resolved_args[0]))
+                    return True, int(value), "int", {"preview": str(int(value))}
+                if callee == "u32" and resolved_args:
+                    value = u32(bytes(resolved_args[0]))
+                    return True, int(value), "int", {"preview": str(int(value))}
+                if callee == "u64" and resolved_args:
+                    value = u64(bytes(resolved_args[0]))
+                    return True, int(value), "int", {"preview": str(int(value))}
+                if callee.endswith(".encode"):
+                    receiver = resolved_args[0] if resolved_args else self._receiver_value(callee, args)
+                    if isinstance(receiver, str):
+                        encoding = (
+                            str(resolved_args[1])
+                            if len(resolved_args) > 1
+                            else str(resolved_kwargs.get("encoding", "utf-8"))
+                        )
+                        errors = (
+                            str(resolved_args[2])
+                            if len(resolved_args) > 2
+                            else str(resolved_kwargs.get("errors", "strict"))
+                        )
+                        value = receiver.encode(encoding, errors)
+                        return True, value, "bytes", self._bytes_summary(value)
         except Exception:
             return False, None, None, {}
         return False, None, None, {}

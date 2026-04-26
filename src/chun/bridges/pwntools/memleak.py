@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable
 
-from ..._compat import MemLeak
+from ... import _compat
 from ...core.models import ContextKind, ObservationKind, RecordDomain
 from ...core.registry import EvidenceRegistry
 
@@ -26,7 +26,7 @@ class MemLeakAdapter:
         self.registry = registry
         self.domain = domain
         self.chunk_size = chunk_size
-        self.memleak_cls = memleak_cls or MemLeak
+        self.memleak_cls = memleak_cls or _compat.MemLeak
         self._memleak: object | None = None
         self._takes_size = self._detect_size_arg(leak_primitive)
 

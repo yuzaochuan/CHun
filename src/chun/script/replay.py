@@ -7,16 +7,16 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
 
-from ..bridges.gdb import PwntoolsGdbBridge
-from ..core.analysis import CorefileAnalyzer
-from ..core.inference import InferenceService
-from ..core.registry import EvidenceRegistry
 from ..core.replay import ReplayEvent, ReplayEventKind, ReplayExecutor, VerificationResult
-from ..core.resolve import ResolveService
-from .fmt import _ScriptFmtFacade
 
 if TYPE_CHECKING:
+    from ..bridges.gdb import PwntoolsGdbBridge
+    from ..core.analysis import CorefileAnalyzer
+    from ..core.inference import InferenceService
+    from ..core.registry import EvidenceRegistry
+    from ..core.resolve import ResolveService
     from ..core.session import CHunSession
+    from .fmt import _ScriptFmtFacade
 
 
 def _script_module() -> Any:
@@ -59,6 +59,8 @@ class _ReplayScriptProxy:
 
     @property
     def fmt(self) -> _ScriptFmtFacade:
+        from .fmt import _ScriptFmtFacade
+
         return _ScriptFmtFacade(self._session.fmt)
 
     @property

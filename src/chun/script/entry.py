@@ -6,23 +6,23 @@ import sys
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, Sequence
 
-from ..bridges.gdb import PwntoolsGdbBridge
-from ..core.analysis import CorefileAnalyzer
 from ..core.cache import CacheService, default_cache_dir
 from ..core.errors import TransportConfigError
-from ..core.inference import InferenceService
 from ..core.models import ContextKind, RecordDomain, TargetSpec
-from ..core.registry import EvidenceRegistry
-from ..core.resolve import ResolveService
-from ..transports.pwntools_tube import PwntoolsTubeTransport
 from .constants import DEFAULT_SCRIPT_TERMINAL, HEX_POINTER_RE
-from .fmt import _ScriptFmtFacade
-from .gadget import _ScriptGadgetFacade
 from .lazy import LazyELFProxy
 from .replay import ReplayScriptMixin
 
 if TYPE_CHECKING:
+    from ..bridges.gdb import PwntoolsGdbBridge
+    from ..core.analysis import CorefileAnalyzer
+    from ..core.inference import InferenceService
+    from ..core.registry import EvidenceRegistry
+    from ..core.resolve import ResolveService
     from ..core.session import CHunSession
+    from ..transports.pwntools_tube import PwntoolsTubeTransport
+    from .fmt import _ScriptFmtFacade
+    from .gadget import _ScriptGadgetFacade
 
 
 def _script_module() -> Any:
@@ -323,6 +323,8 @@ class ScriptEntry(ReplayScriptMixin):
         session = self.session
         if session.target.kind != "process":
             raise TransportConfigError("ScriptEntry.debug() 仅支持本地 process 目标。")
+        from ..transports.pwntools_tube import PwntoolsTubeTransport
+
         if not isinstance(session.transport, PwntoolsTubeTransport):
             raise TransportConfigError(
                 "ScriptEntry.debug() 仅支持 pwntools-tube transport。"
@@ -422,18 +424,22 @@ class ScriptEntry(ReplayScriptMixin):
         return self.session.dbg
 
     @property
-    def crash(self) -> CorefileAnalyzer:
+    def crash(self) -> "CorefileAnalyzer":
         """访问 session 的 core dump / crash 分析入口。"""
         return self.session.crash
 
     @property
     def fmt(self) -> _ScriptFmtFacade:
         """访问 session 的 fmt 服务。"""
+        from .fmt import _ScriptFmtFacade
+
         return _ScriptFmtFacade(self.session.fmt)
 
     @property
     def gadget(self) -> _ScriptGadgetFacade:
         """访问脚本态 gadget 语法糖，支持 `s.gadget[\"rdi\"]`。"""
+        from .gadget import _ScriptGadgetFacade
+
         return _ScriptGadgetFacade(self)
 
     def checkpoint(
