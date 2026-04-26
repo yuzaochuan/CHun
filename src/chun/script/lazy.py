@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import Any, Callable
 
 from ..core.cache import CacheService
 from ..core.models.cache import AddressMode
@@ -55,12 +55,19 @@ class LazyELFProxy:
         *,
         cache: CacheService,
         loader: Any,
+        runtime_base_getter: Callable[[], int | None] | None = None,
+        warning_emitter: Callable[[str], None] | None = None,
+        runtime_name: str = "elf.base",
     ) -> None:
         self.path = str(path)
         self.cache = cache
         self._loader = loader
+        self._runtime_base_getter = runtime_base_getter
+        self._warning_emitter = warning_emitter
+        self._runtime_name = str(runtime_name)
         self._raw: Any = None
         self._info: dict[str, Any] | None = None
+        self._warned_missing_runtime_base: set[tuple[str, str]] = set()
         self._symbols = _LazyLookupMapping(self, "symbols")
         self._got = _LazyLookupMapping(self, "got")
         self._plt = _LazyLookupMapping(self, "plt")
@@ -185,8 +192,8 @@ class LazyELFProxy:
     def lookup(self, table: str, name: str) -> int:
         cached = self.cache.get_elf_lookup(self.path, table=table, name=name)
         if cached is not None:
-            value, _mode = cached
-            return self._normalize_vaddr_if_needed(int(value), mode=_mode)
+            value, mode = cached
+            return self._resolve_lookup_value(int(value), mode=mode, table=table, name=name)
 
         raw = self.materialize_raw()
         mapping = self._raw_table(raw, table)
@@ -203,7 +210,7 @@ class LazyELFProxy:
             address_mode=mode,
             loader=self._loader,
         )
-        return int(canonical)
+        return self._resolve_lookup_value(int(canonical), mode=mode, table=table, name=name)
 
     def _address_mode(self) -> AddressMode:
         info = self.ensure_minimal_info()
@@ -251,6 +258,49 @@ class LazyELFProxy:
         if image_base > 0 and 0 <= value < image_base:
             return int(image_base + value)
         return int(value)
+
+    def _resolve_lookup_value(
+        self,
+        value: int,
+        *,
+        mode: AddressMode,
+        table: str,
+        name: str,
+    ) -> int:
+        if mode == "vaddr":
+            return self._normalize_vaddr_if_needed(int(value), mode=mode)
+        runtime_base = self._runtime_base()
+        if runtime_base is not None:
+            return int(runtime_base + value)
+        self._warn_missing_runtime_base_once(table=table, name=name)
+        return int(value)
+
+    def _runtime_base(self) -> int | None:
+        getter = self._runtime_base_getter
+        if getter is None:
+            return None
+        try:
+            value = getter()
+        except Exception:
+            return None
+        if isinstance(value, int) and value > 0:
+            return int(value)
+        return None
+
+    def _warn_missing_runtime_base_once(self, *, table: str, name: str) -> None:
+        if not self.pie:
+            return
+        key = (table, name)
+        if key in self._warned_missing_runtime_base:
+            return
+        self._warned_missing_runtime_base.add(key)
+        emitter = self._warning_emitter
+        if emitter is None:
+            return
+        emitter(
+            f"检测到 PIE，但尚未记录 {self._runtime_name}；"
+            f"当前返回 {table}[{name!r}] 的静态 offset。"
+        )
 
     def __getattr__(self, name: str) -> Any:
         # 对外保留 raw ELF 能力：未知属性触发真正 materialize。

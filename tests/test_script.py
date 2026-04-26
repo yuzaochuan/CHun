@@ -1866,6 +1866,112 @@ def test_script_elf_sym_symbol_symbols_share_cache_mapping(
     assert symbols.get("main") == 0x401080
 
 
+def test_script_pie_elf_lookups_use_runtime_elf_base_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.rec.record_fact("elf.base", 0x555555554000)
+
+    class PieFakeELF(FakeELF):
+        def __init__(self, path: str, *, libc: Any = None) -> None:
+            super().__init__(path=path, libc=libc)
+            self.address = 0x555555554000
+            self.pie = True
+            self.nx = True
+            self.canary = False
+            self.relro = "Partial RELRO"
+            self.stripped = False
+            self.static = False
+            self.entry = 0x1000
+            self.symbols = {"main": 0x1234}
+            self.sym = self.symbols
+            self.got = {"puts": 0x4018}
+            self.plt = {"puts": 0x1030}
+            self.sections = {".bss": 0x5000}
+
+    def pie_loader(path: str, checksec: bool = False) -> PieFakeELF:
+        _ = checksec
+        return PieFakeELF(path)
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ELF", pie_loader)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+
+    assert entry.elf.sym["main"] == 0x555555555234
+    assert entry.elf.got["puts"] == 0x555555558018
+    assert entry.elf.plt["puts"] == 0x555555555030
+    assert entry.elf.sections[".bss"] == 0x555555559000
+    assert entry.elf_base == 0x555555554000
+
+    record = entry._cache.get_elf_record(entry.elf.path)
+    assert record is not None
+    assert record["address_mode"] == "offset"
+    assert record["symbols"]["main"] == 0x1234
+    assert record["got"]["puts"] == 0x4018
+    assert record["plt"]["puts"] == 0x1030
+    assert record["sections"][".bss"] == 0x5000
+
+
+def test_script_pie_elf_lookups_warn_and_fallback_to_offset_without_elf_base(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    warnings: list[str] = []
+
+    class PieFakeELF(FakeELF):
+        def __init__(self, path: str, *, libc: Any = None) -> None:
+            super().__init__(path=path, libc=libc)
+            self.address = 0x555555554000
+            self.pie = True
+            self.nx = True
+            self.canary = False
+            self.relro = "Partial RELRO"
+            self.stripped = False
+            self.static = False
+            self.entry = 0x1000
+            self.symbols = {"main": 0x1234}
+            self.sym = self.symbols
+            self.got = {"puts": 0x4018}
+            self.plt = {}
+            self.sections = {}
+
+    def pie_loader(path: str, checksec: bool = False) -> PieFakeELF:
+        _ = checksec
+        return PieFakeELF(path)
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ELF", pie_loader)
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+
+    assert entry.elf.sym["main"] == 0x1234
+    assert entry.elf.got["puts"] == 0x4018
+    assert warnings == [
+        "检测到 PIE，但尚未记录 elf.base；当前返回 symbols['main'] 的静态 offset。",
+        "检测到 PIE，但尚未记录 elf.base；当前返回 got['puts'] 的静态 offset。",
+    ]
+
+
 def test_script_gadget_non_pie_offset_result_is_normalized_to_vaddr_and_cached(
     monkeypatch: pytest.MonkeyPatch,
     fake_pwntools_env: dict[str, Any],
@@ -1962,6 +2068,108 @@ def test_script_gadget_sugar_supports_libc_source_and_runtime_base(
 
     assert entry.gadget["libc:rdi"] == 0x7F1200001234
     assert calls == [entry.libc.materialize_raw()]
+
+
+def test_script_gadget_pie_uses_runtime_elf_base(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.rec.record_fact("elf.base", 0x555555554000)
+
+    class PieFakeELF(FakeELF):
+        def __init__(self, path: str, *, libc: Any = None) -> None:
+            super().__init__(path=path, libc=libc)
+            self.address = 0x555555554000
+            self.pie = True
+            self.nx = True
+            self.canary = False
+            self.relro = "Partial RELRO"
+            self.stripped = False
+            self.static = False
+
+    def pie_loader(path: str, checksec: bool = False) -> PieFakeELF:
+        _ = checksec
+        return PieFakeELF(path)
+
+    class FakeGadget:
+        def __init__(self, address: int) -> None:
+            self.address = address
+
+    class FakeROP:
+        def __init__(self, _image: object) -> None:
+            pass
+
+        def find_gadget(self, _items: list[str]) -> FakeGadget:
+            return FakeGadget(0x1234)
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ELF", pie_loader)
+    monkeypatch.setattr(script_mod, "ROP", FakeROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+
+    assert entry.gadget["rdi"] == 0x555555555234
+
+
+def test_script_gadget_pie_warns_and_falls_back_to_offset_without_elf_base(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    warnings: list[str] = []
+
+    class PieFakeELF(FakeELF):
+        def __init__(self, path: str, *, libc: Any = None) -> None:
+            super().__init__(path=path, libc=libc)
+            self.address = 0x555555554000
+            self.pie = True
+            self.nx = True
+            self.canary = False
+            self.relro = "Partial RELRO"
+            self.stripped = False
+            self.static = False
+
+    def pie_loader(path: str, checksec: bool = False) -> PieFakeELF:
+        _ = checksec
+        return PieFakeELF(path)
+
+    class FakeGadget:
+        def __init__(self, address: int) -> None:
+            self.address = address
+
+    class FakeROP:
+        def __init__(self, _image: object) -> None:
+            pass
+
+        def find_gadget(self, _items: list[str]) -> FakeGadget:
+            return FakeGadget(0x1234)
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ELF", pie_loader)
+    monkeypatch.setattr(script_mod, "ROP", FakeROP)
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+
+    assert entry.gadget["rdi"] == 0x1234
+    assert warnings == ["检测到 PIE，但尚未记录 elf.base；当前返回 gadget 的静态 offset。"]
 
 
 def test_script_gadget_sugar_rejects_invalid_token(
@@ -2072,4 +2280,3 @@ def test_script_gadget_not_found_is_cached(
     monkeypatch.setattr(script_mod, "ROP", BombROP)
     with pytest.raises(LookupError):
         _ = entry.gadget["ret"]
-

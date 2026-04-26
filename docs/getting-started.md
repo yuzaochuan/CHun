@@ -61,11 +61,13 @@ print(io.recvuntil(b"\n"))
 - `t.start()` 返回 `t` 自身，因此既支持分步写法，也支持 `t = CHun.script(...).start()`
 - `t.start()` 后会通过 `session.bind_binaries()` 把 `t.elf` / `t.libc` 绑定到当前 session，并把 `binary.path`、`arch.bits`、`arch.endian`、`arch.pointer_size`、`libc.path` 等规范化信息写进 registry context
 - `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力的显式入口
+- 若题目开启 PIE，`t.resolve.pie_base_from_elf_symbol(...)` 写入 `elf.base` 后，脚本态 `t.elf.sym/got/plt/sections[...]` 与 `t.gadget[...]` 会默认返回运行时绝对地址
 - `t.sla()` / `t.rl()` / `t.ia()` 等高频交互方法与 alias
 - 低频 tube 方法可继续通过 fallback 使用，例如 `t.clean()`
 
 ```python
 from chun import CHun
+from chun.core.models import RecordDomain
 from pwn import *
 
 t = CHun.script("./challenge", host="example.com", port=31337, libc="./libc.so.6")
@@ -76,6 +78,11 @@ t.start()
 
 t.gdb("b *main\nc")
 t.sla(b"menu> ", b"1")
+leak = 0x555555555234
+t.rec.record_symbol_leak("main", leak, domain=RecordDomain.ELF, source="leak")
+t.resolve.pie_base_from_elf_symbol("main", symbol="main")
+print(hex(t.elf_base))
+print(hex(t.elf.sym["main"]))
 base = t.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
 print(hex(base.value))
 ```

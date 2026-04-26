@@ -8,7 +8,7 @@
 
 - cache 只保存静态事实（offset / 元信息）
 - 运行时事实（如 `libc.base` / `elf.base`）仍属于 `session.rec`
-- 运行时地址仍由 resolver 负责组合，不由 cache 直接返回绝对地址
+- cache 不直接持久化 runtime base；脚本层若已存在 `elf.base` / `libc.base`，可在读取时临时组合成绝对地址
 
 ## 接入范围
 
@@ -133,7 +133,15 @@ cache key 基于文件内容 `sha256`，不是仅基于路径。
 - PIE ELF：保存 offset（`address_mode=offset`）
 - non-PIE ELF：保存 vaddr（`address_mode=vaddr`）
 
-运行时地址由 resolver + runtime base（`libc.base` / `elf.base`）统一解释。
+运行时地址由 runtime base（`libc.base` / `elf.base`）在消费期解释。
+
+脚本态当前语义：
+
+- `s.elf.sym/got/plt/sections[...]`
+  - non-PIE：直接返回静态 vaddr
+  - PIE 且已记录 `elf.base`：返回 `elf.base + offset`
+  - PIE 但尚未记录 `elf.base`：warning 一次，并退回静态 offset
+- gadget cache 仍只保存 offset/vaddr；脚本态 `s.gadget[...]` 也按同样规则解释 `elf.base`
 
 ## CLI 查看缓存
 

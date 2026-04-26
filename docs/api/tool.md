@@ -150,6 +150,9 @@ t.gdb("b *main\nc")
 - `t.gadget["ret"]` 语义为 `ret`，`t.gadget["leave"]` 语义为 `leave; ret`
 - `t.gadget["libc:rdi"]` 表示从 libc 镜像查找对应 gadget；不带前缀时默认查 ELF 镜像
 - `t.elf.sym["main"]` / `t.elf.symbol["main"]` / `t.elf.symbols["main"]` 在脚本态都会收敛到同一条 `symbols` cache 记录
+- 若 ELF 未开启 PIE，上述 `t.elf.sym/got/plt/sections[...]` 直接返回静态地址；若 ELF 开启 PIE 且 `elf.base` 已写入事实层，则脚本态默认返回运行时绝对地址
+- 若 ELF 开启 PIE 但 `elf.base` 尚未记录，脚本态会 warning 一次，并退回静态 offset；底层 cache 仍保持 offset 语义
+- `t.elf_base` 提供 `elf.base` 的快捷读取；未推导时抛 `RuntimeError`
 - 默认不再自动绑定本机 `elf.libc`：未显式传 `libc=...` 时，`t.libc` 为 unresolved
 - 需要自动探测本机 libc 时，需显式启用 `auto_local_libc=True`
 - `cache=True` 时会启用跨进程 JSON 磁盘缓存；`cache_dir` 可覆盖默认缓存目录
