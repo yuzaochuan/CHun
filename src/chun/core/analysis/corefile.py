@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..._compat import Corefile, cyclic_find
+from ... import _compat
 from ..errors import CrashAnalysisError
 from ..models import (
     ContextKind,
@@ -27,8 +27,8 @@ class CorefileAnalyzer:
         cyclic_finder: Any = None,
     ) -> None:
         self.registry = registry
-        self.corefile_factory = corefile_factory or Corefile
-        self.cyclic_finder = cyclic_finder or cyclic_find
+        self.corefile_factory = corefile_factory or _compat.Corefile
+        self.cyclic_finder = cyclic_finder or _compat.cyclic_find
 
     def _load_corefile(self, core: object) -> object:
         if isinstance(core, (str, bytes)):

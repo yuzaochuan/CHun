@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 
-from ..._compat import ELF, log
+from ... import _compat
 from ...facade import CHun, DEFAULT_TERMINAL
 from ..session import CHunSession
 
@@ -61,9 +61,9 @@ class ProcessLauncher:
         if not resolved.exists():
             return None
         try:
-            return ELF(str(resolved), checksec=False)
+            return _compat.ELF(str(resolved), checksec=False)
         except Exception as exc:
-            log.warning(f"workflow launcher 无法加载 ELF: {resolved} ({exc})")
+            _compat.log.warning(f"workflow launcher 无法加载 ELF: {resolved} ({exc})")
             return None
 
     def _resolve_path(self, path: str) -> Path:

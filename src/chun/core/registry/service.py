@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from enum import Enum
 from typing import Any, Callable, Iterable, Literal, TypeVar, cast
 
-from ..._compat import log
 from ..replay import (
     ReplayCheckpoint,
     ReplayEvent,
@@ -54,6 +54,7 @@ _DETAIL_VALUES = {"compact", "standard", "verbose"}
 _EMIT_VALUES = {"debug", "info", "warning"}
 _ARTIFACT_MODE_VALUES = {"summary", "repr", "skip"}
 _REPLAY_PAYLOAD_MODE_VALUES = {"repr", "hex"}
+_LOG = logging.getLogger("chun")
 
 
 class EvidenceRegistry:
@@ -610,10 +611,10 @@ class EvidenceRegistry:
     @staticmethod
     def _resolve_emitter(level: RegistryEmit) -> Callable[[str], None]:
         if level == "debug":
-            return log.debug
+            return _LOG.debug
         if level == "warning":
-            return log.warning
-        return log.info
+            return _LOG.warning
+        return _LOG.info
 
     def show(
         self,

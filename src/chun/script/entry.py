@@ -6,23 +6,23 @@ import sys
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, Sequence
 
-from ..bridges.gdb import PwntoolsGdbBridge
-from ..core.analysis import CorefileAnalyzer
 from ..core.cache import CacheService, default_cache_dir
 from ..core.errors import TransportConfigError
-from ..core.inference import InferenceService
 from ..core.models import ContextKind, RecordDomain, TargetSpec
-from ..core.registry import EvidenceRegistry
-from ..core.resolve import ResolveService
-from ..transports.pwntools_tube import PwntoolsTubeTransport
 from .constants import DEFAULT_SCRIPT_TERMINAL, HEX_POINTER_RE
-from .fmt import _ScriptFmtFacade
-from .gadget import _ScriptGadgetFacade
 from .lazy import LazyELFProxy
 from .replay import ReplayScriptMixin
 
 if TYPE_CHECKING:
+    from ..bridges.gdb import PwntoolsGdbBridge
+    from ..core.analysis import CorefileAnalyzer
+    from ..core.inference import InferenceService
+    from ..core.registry import EvidenceRegistry
+    from ..core.resolve import ResolveService
     from ..core.session import CHunSession
+    from ..transports.pwntools_tube import PwntoolsTubeTransport
+    from .fmt import _ScriptFmtFacade
+    from .gadget import _ScriptGadgetFacade
 
 
 def _script_module() -> Any:
@@ -89,7 +89,14 @@ class ScriptEntry(ReplayScriptMixin):
             raise TransportConfigError("CHun.script(...) 需要提供 binary。")
 
         loader = _script_module().ELF
-        self._elf = LazyELFProxy(self.target.binary, cache=self._cache, loader=loader)
+        self._elf = LazyELFProxy(
+            self.target.binary,
+            cache=self._cache,
+            loader=loader,
+            runtime_base_getter=self._read_elf_base,
+            warning_emitter=self._emit_script_warning,
+            runtime_name="elf.base",
+        )
 
         self._set_context_binary(self._elf)
 
@@ -185,6 +192,22 @@ class ScriptEntry(ReplayScriptMixin):
             libc_path=self._libc_path,
             source=self._libc_source,  # type: ignore[arg-type]
         )
+
+    def _emit_script_warning(self, message: str) -> None:
+        _script_module().log.warning(message)
+
+    def _read_elf_base(self) -> int | None:
+        session = self._session
+        if session is None:
+            return None
+        getter = getattr(session.rec, "get_fact", None)
+        if not callable(getter):
+            return None
+        fact = getter("elf.base")
+        value = getattr(fact, "value", None) if fact is not None else None
+        if isinstance(value, int) and value > 0:
+            return int(value)
+        return None
 
     @staticmethod
     def _sync_pwntools_context_from_elf_info(elf_info: dict[str, Any]) -> None:
@@ -300,6 +323,8 @@ class ScriptEntry(ReplayScriptMixin):
         session = self.session
         if session.target.kind != "process":
             raise TransportConfigError("ScriptEntry.debug() 仅支持本地 process 目标。")
+        from ..transports.pwntools_tube import PwntoolsTubeTransport
+
         if not isinstance(session.transport, PwntoolsTubeTransport):
             raise TransportConfigError(
                 "ScriptEntry.debug() 仅支持 pwntools-tube transport。"
@@ -364,6 +389,16 @@ class ScriptEntry(ReplayScriptMixin):
         return self.session.libc_base
 
     @property
+    def elf_base(self) -> int:
+        """返回当前 session 中已确认的 PIE base。"""
+        try:
+            return self.session.rec.require_int_fact("elf.base")
+        except KeyError as exc:
+            raise RuntimeError("elf.base 尚未推导，请先记录符号泄漏并推导 PIE base。") from exc
+        except TypeError as exc:
+            raise RuntimeError("elf.base 已存在，但其值不是整数。") from exc
+
+    @property
     def libc_version(self) -> str:
         """返回当前 session 中已确认的 libc 版本名。"""
         return self.session.libc_version
@@ -389,18 +424,22 @@ class ScriptEntry(ReplayScriptMixin):
         return self.session.dbg
 
     @property
-    def crash(self) -> CorefileAnalyzer:
+    def crash(self) -> "CorefileAnalyzer":
         """访问 session 的 core dump / crash 分析入口。"""
         return self.session.crash
 
     @property
     def fmt(self) -> _ScriptFmtFacade:
         """访问 session 的 fmt 服务。"""
+        from .fmt import _ScriptFmtFacade
+
         return _ScriptFmtFacade(self.session.fmt)
 
     @property
     def gadget(self) -> _ScriptGadgetFacade:
         """访问脚本态 gadget 语法糖，支持 `s.gadget[\"rdi\"]`。"""
+        from .gadget import _ScriptGadgetFacade
+
         return _ScriptGadgetFacade(self)
 
     def checkpoint(

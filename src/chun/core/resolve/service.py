@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol, SupportsInt
 
+from ... import _compat
 from ...bridges.pwntools import MemLeakAdapter
-from ..._compat import ELF as PWN_ELF
 from ..cache import CacheService
 from ..catalog import LibcCatalogService
 from ..errors import ResolverError
@@ -17,6 +17,10 @@ from .dynelf import DynELFResolver
 
 if TYPE_CHECKING:
     from ..session import CHunSession
+
+
+def PWN_ELF(*args: object, **kwargs: object) -> object:
+    return _compat.ELF(*args, **kwargs)
 
 
 class SupportsSym(Protocol):

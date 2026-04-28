@@ -162,8 +162,16 @@ class _ScriptGadgetFacade:
         image: object,
         gadget_address: int,
     ) -> int:
-        # pwntools 在不同对象上可能返回 offset 或已加基址地址。
         base = self._read_image_base(source)
+        if source == "elf" and bool(getattr(image, "pie", False)) and base is None:
+            self._warn_missing_elf_base_once()
+            return self._canonicalize_cached_value(
+                image=image,
+                gadget_address=gadget_address,
+                address_mode="offset",
+            )
+
+        # pwntools 在不同对象上可能返回 offset 或已加基址地址。
         image_base = self._image_base(image)
         if image_base > 0 and 0 <= gadget_address < image_base:
             if base is None:
@@ -194,6 +202,15 @@ class _ScriptGadgetFacade:
         if isinstance(value, int) and value > 0:
             return int(value)
         return None
+
+    def _warn_missing_elf_base_once(self) -> None:
+        flag = "_warned_missing_elf_base"
+        if getattr(self, flag, False):
+            return
+        setattr(self, flag, True)
+        _script_module().log.warning(
+            "检测到 PIE，但尚未记录 elf.base；当前返回 gadget 的静态 offset。"
+        )
 
     @staticmethod
     def _materialize_rop_image(image: object) -> object:

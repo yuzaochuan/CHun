@@ -7,7 +7,6 @@ CHun 当前已进入第三轮收口阶段：在前两轮的 transport + registry
 ## 核心特性
 
 - 会话入口：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()`
-  <<<<<<< HEAD
 - 脚本模式入口：`CHun.script()`，保留人工写 exp 时的快速切换手感
 - Web 方向 transport：`CHun.http()` / `CHun.websocket()`
 - Blind transport：`CHun.blind()` + `BlindReconnectTransport`
@@ -25,7 +24,6 @@ CHun 当前已进入第三轮收口阶段：在前两轮的 transport + registry
 - Blind transport：`CHun.blind()` + `BlindReconnectTransport`
 - 第一阶段主力 transport：`PwntoolsTubeTransport` / `HttpxTransport` / `WebSocketTransport`
 - `PwnRegistry` 仍保留为独立状态中心，后续阶段再接回完整 session
-  > > > > > > > main
 
 ## 安装
 

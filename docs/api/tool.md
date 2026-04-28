@@ -150,6 +150,9 @@ t.gdb("b *main\nc")
 - `t.gadget["ret"]` 语义为 `ret`，`t.gadget["leave"]` 语义为 `leave; ret`
 - `t.gadget["libc:rdi"]` 表示从 libc 镜像查找对应 gadget；不带前缀时默认查 ELF 镜像
 - `t.elf.sym["main"]` / `t.elf.symbol["main"]` / `t.elf.symbols["main"]` 在脚本态都会收敛到同一条 `symbols` cache 记录
+- 若 ELF 未开启 PIE，上述 `t.elf.sym/got/plt/sections[...]` 直接返回静态地址；若 ELF 开启 PIE 且 `elf.base` 已写入事实层，则脚本态默认返回运行时绝对地址
+- 若 ELF 开启 PIE 但 `elf.base` 尚未记录，脚本态会 warning 一次，并退回静态 offset；底层 cache 仍保持 offset 语义
+- `t.elf_base` 提供 `elf.base` 的快捷读取；未推导时抛 `RuntimeError`
 - 默认不再自动绑定本机 `elf.libc`：未显式传 `libc=...` 时，`t.libc` 为 unresolved
 - 需要自动探测本机 libc 时，需显式启用 `auto_local_libc=True`
 - `cache=True` 时会启用跨进程 JSON 磁盘缓存；`cache_dir` 可覆盖默认缓存目录
@@ -170,6 +173,10 @@ t.gdb("b *main\nc")
 
 - `CHun.process()` / `CHun.remote()` / `CHun.ssh_process()` / `CHun.http()` / `CHun.websocket()` / `CHun.blind()` 在内部都先落到同一套私有 `TargetSpec` / `TransportSpec` builder
 - `CHun.script()` 也不再单独拼装 transport，而是复用相同 builder，再统一走 `from_specs()`
+- 顶层包 `chun` 对公共导出采用 lazy export；`from chun import CHun` 不会在导入时立刻初始化完整 core/script/workflow 栈
+- `chun.core` / `chun.script` / `chun.transports` 这些包级导出同样改成 lazy export；单独导入 `CHunSession` 或 `ScriptEntry` 时，不再因为包 `__init__` 提前拉起整套 runtime
+- `CHunSession` 上的 `dbg` / `gdb_mi` / `crash` / `fmt` 改为首次访问时再实例化；导入 session 本身不会自动初始化 GDB bridge、corefile analyzer 或 fmt 服务
+- `chun._compat` 现已拆成“轻代理 + 重对象懒加载”：`args/context/log/gdb` 在导入期不会触发 pwntools，`ELF/ROP/DynELF/Corefile/process/remote/...` 则在首次真正使用时才加载
 - 脚本态实现已从单文件 `src/chun/script.py` 拆分为 `src/chun/script/` 包（`entry.py` / `replay.py` / `fmt.py` / `constants.py`）；对外 API 与导入路径保持不变
 - `ScriptEntry.target` 是脚本入口缓存的基础 `TargetSpec`
 - `ScriptEntry.start()` 在 `REMOTE` 模式下会基于该 target 派生 remote target，再配合 `pwntools-tube` transport 进入统一 session 装配路径

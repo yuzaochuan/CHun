@@ -43,6 +43,8 @@ nav:
       - Base 推导: cookbook/infer-base.md
   - 开发文档:
       - 总览: development/index.md
+      - 版本记录规范: development/versioning.md
+      - 版本历史: development/version-history.md
       - 路线图: development/roadmap.md
       - 下一阶段起点: development/next-phase.md
       - 文档规范: development/documentation-style.md

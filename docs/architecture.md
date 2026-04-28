@@ -115,6 +115,16 @@
 
 `CHunSession` 现在已经承载 transport、registry 与最小 inference，但仍然不会把后续系统一次性铺满。
 
+这里的“承载”指 runtime 能力边界，而不是 import-time 全量初始化。当前实现已经把以下能力改为 lazy runtime binding：
+
+- `session.dbg`
+- `session.gdb_mi`
+- `session.crash`
+- `session.fmt`
+- `_compat` 中的 pwntools 重对象（如 `ELF` / `DynELF` / `Corefile` / `process`）
+
+也就是说，导入 `CHunSession` / `ScriptEntry` 时只建立稳定入口，真正的 pwntools / GDB / corefile / fmt 依赖会尽量推迟到第一次访问对应能力时再加载。
+
 当前稳定字段：
 
 - `session.target`

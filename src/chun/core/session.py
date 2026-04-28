@@ -4,19 +4,20 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
-from ..plugins.fmt import FmtService
-from ..transports import build_transport
 from ..transports.base import BaseTransport
-from .analysis import CorefileAnalyzer
 from .catalog import LibcCatalogService
 from .inference import InferenceService
 from .models import ContextKind, RecordDomain, TargetSpec, TransportSpec
 from .replay import ReplayEventKind
 from .registry import EvidenceRegistry
 from .resolve import ResolveService
+
+if TYPE_CHECKING:
+    from .analysis import CorefileAnalyzer
+    from ..bridges.gdb import GdbMiBridge, PwntoolsGdbBridge
+    from ..plugins.fmt import FmtService
 
 
 @dataclass(slots=True)
@@ -43,11 +44,11 @@ class CHunSession:
     elf: object | None = field(default=None, init=False, repr=False)
     libc_elf: object | None = field(default=None, init=False, repr=False)
     infer: InferenceService = field(init=False)
-    dbg: PwntoolsGdbBridge = field(init=False)
-    gdb_mi: GdbMiBridge = field(init=False)
+    _dbg: "PwntoolsGdbBridge | None" = field(default=None, init=False, repr=False)
+    _gdb_mi: "GdbMiBridge | None" = field(default=None, init=False, repr=False)
     resolve: ResolveService = field(init=False)
-    crash: CorefileAnalyzer = field(init=False)
-    fmt: FmtService = field(init=False)
+    _crash: "CorefileAnalyzer | None" = field(default=None, init=False, repr=False)
+    _fmt: "FmtService | None" = field(default=None, init=False, repr=False)
     replay_session_factory: Callable[[], "CHunSession"] | None = field(
         default=None,
         repr=False,
@@ -58,16 +59,12 @@ class CHunSession:
         self.infer = InferenceService(
             self.registry, libc_catalog=self.libc_catalog, session=self
         )
-        self.dbg = PwntoolsGdbBridge(self.registry, self.target, lambda: self.raw)
-        self.gdb_mi = GdbMiBridge(self.registry, self.target)
         self.resolve = ResolveService(
             self.registry,
             self.infer,
             catalog_service=self.libc_catalog,
             session=self,
         )
-        self.crash = CorefileAnalyzer(self.registry)
-        self.fmt = FmtService(self)
         self._seed_context()
         self._bind_replay_hook()
 
@@ -189,7 +186,7 @@ class CHunSession:
         replay_session = CHunSession(
             target=target,
             transport_spec=spec,
-            transport=build_transport(target, spec),
+            transport=self._build_transport(target, spec),
         )
         replay_session.bind_binaries(
             elf=self.elf,
@@ -202,6 +199,46 @@ class CHunSession:
     def rec(self) -> EvidenceRegistry:
         """`registry` 的语义化短别名。"""
         return self.registry
+
+    @property
+    def dbg(self) -> "PwntoolsGdbBridge":
+        controller = self._dbg
+        if controller is None:
+            from ..bridges.gdb import PwntoolsGdbBridge
+
+            controller = PwntoolsGdbBridge(self.registry, self.target, lambda: self.raw)
+            self._dbg = controller
+        return controller
+
+    @property
+    def gdb_mi(self) -> "GdbMiBridge":
+        bridge = self._gdb_mi
+        if bridge is None:
+            from ..bridges.gdb import GdbMiBridge
+
+            bridge = GdbMiBridge(self.registry, self.target)
+            self._gdb_mi = bridge
+        return bridge
+
+    @property
+    def fmt(self) -> "FmtService":
+        service = self._fmt
+        if service is None:
+            from ..plugins.fmt.service import FmtService
+
+            service = FmtService(self)
+            self._fmt = service
+        return service
+
+    @property
+    def crash(self) -> "CorefileAnalyzer":
+        analyzer = self._crash
+        if analyzer is None:
+            from .analysis import CorefileAnalyzer
+
+            analyzer = CorefileAnalyzer(self.registry)
+            self._crash = analyzer
+        return analyzer
 
     @property
     def io(self) -> BaseTransport:
@@ -363,6 +400,12 @@ class CHunSession:
     def _bind_replay_hook(self) -> None:
         if hasattr(self.transport, "bind_replay_hook"):
             self.transport.bind_replay_hook(self._handle_transport_replay_event)
+
+    @staticmethod
+    def _build_transport(target: TargetSpec, spec: TransportSpec) -> BaseTransport:
+        from ..transports import build_transport
+
+        return build_transport(target, spec)
 
     def _handle_transport_replay_event(self, event: str, payload: dict[str, object]) -> None:
         if event == "spawn":

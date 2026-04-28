@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from ..._compat import DynELF
+from ... import _compat
 from ...bridges.pwntools import MemLeakAdapter
 from ..errors import ResolverError
 from ..models import FactKind, RecordDomain, ResolvedSymbolResult
@@ -23,7 +23,7 @@ class DynELFResolver:
     ) -> None:
         self.registry = registry
         self.adapter_cls = adapter_cls
-        self.dynelf_cls = dynelf_cls or DynELF
+        self.dynelf_cls = dynelf_cls or _compat.DynELF
 
     def lookup(
         self,
