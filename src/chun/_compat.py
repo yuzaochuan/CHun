@@ -40,8 +40,34 @@ class _ArgsProxy:
     """惰性代理 pwntools `args`。"""
 
     def __init__(self) -> None:
-        object.__setattr__(self, "REMOTE", False)
-        object.__setattr__(self, "GDB", False)
+        object.__setattr__(self, "_values", {"REMOTE": False, "GDB": False})
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in {"_values", "__dict__", "__class__"}:
+            return object.__getattribute__(self, name)
+        values = object.__getattribute__(self, "_values")
+        if name in values:
+            try:
+                target = _load_pwn_attr("args")
+            except RuntimeError:
+                return values[name]
+            try:
+                return getattr(target, name)
+            except AttributeError:
+                return values[name]
+        return object.__getattribute__(self, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        values = object.__getattribute__(self, "_values")
+        if name in values:
+            values[name] = value
+            try:
+                target = _load_pwn_attr("args")
+            except RuntimeError:
+                return
+            setattr(target, name, value)
+            return
+        object.__setattr__(self, name, value)
 
     def __getattr__(self, name: str) -> Any:
         try:
@@ -164,6 +190,20 @@ class _FallbackLog:
         LOGGER.info("[成功] %s", message)
 
 
+class _LogProxy:
+    """优先透传 pwntools `log`，缺失时退回标准 logging。"""
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "_fallback", _FallbackLog())
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            target = _load_pwn_attr("log")
+        except RuntimeError:
+            target = object.__getattribute__(self, "_fallback")
+        return getattr(target, name)
+
+
 class _GdbProxy:
     """惰性代理 pwntools `gdb`。"""
 
@@ -177,7 +217,7 @@ class _GdbProxy:
 args = _ArgsProxy()
 context = _ContextProxy()
 gdb = _GdbProxy()
-log = _FallbackLog()
+log = _LogProxy()
 
 
 def pause(*args: Any, **kwargs: Any) -> Any:
