@@ -44,7 +44,9 @@ class DummyIO:
     )
     recv_values: list[bytes] = field(default_factory=list)
     recvline_values: list[bytes] = field(default_factory=list)
+    clean_values: list[bytes] = field(default_factory=list)
     recvregex_match: object | None = None
+    _recv_buffer: bytes = b""
 
     def send(self, data: bytes) -> None:
         self.calls.append(("send", (data,), {}))
@@ -60,9 +62,21 @@ class DummyIO:
 
     def recv(self, n: int = 4096) -> bytes:
         self.calls.append(("recv", (n,), {}))
-        if self.recv_values:
-            return self.recv_values.pop(0)
-        return b"recv"
+        if not self._recv_buffer and self.recv_values:
+            self._recv_buffer = self.recv_values.pop(0)
+        if self._recv_buffer:
+            chunk = self._recv_buffer[:n]
+            self._recv_buffer = self._recv_buffer[n:]
+            return chunk
+        return b""
+
+    def unrecv(self, data: bytes) -> None:
+        self.calls.append(("unrecv", (data,), {}))
+        self._recv_buffer = data + self._recv_buffer
+
+    def can_recv(self, timeout: float = 0) -> bool:
+        self.calls.append(("can_recv", (), {"timeout": timeout}))
+        return bool(self._recv_buffer or self.recv_values)
 
     def recvuntil(self, delim: bytes, drop: bool = False) -> bytes:
         self.calls.append(("recvuntil", (delim,), {"drop": drop}))
@@ -84,8 +98,10 @@ class DummyIO:
     def interactive(self) -> None:
         self.calls.append(("interactive", (), {}))
 
-    def clean(self) -> bytes:
-        self.calls.append(("clean", (), {}))
+    def clean(self, timeout: float | None = None) -> bytes:
+        self.calls.append(("clean", (), {"timeout": timeout}))
+        if self.clean_values:
+            return self.clean_values.pop(0)
         return b"clean"
 
 
@@ -476,6 +492,36 @@ def test_script_fmt_facade_respects_explicit_loginfo_override(
 
     assert entry.fmt.find_offset(loginfo=False) == "offset"
     assert calls == [{"loginfo": False}]
+
+
+def test_script_fmt_facade_exposes_set_offset_for_ide_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    calls: list[dict[str, Any]] = []
+
+    def fake_set_offset(offset: Any, *, overwrite: bool = True, source: str = "fmt.service") -> str:
+        calls.append({"offset": offset, "overwrite": overwrite, "source": source})
+        return "stored"
+
+    session.fmt = SimpleNamespace(set_offset=fake_set_offset)
+
+    def fake_from_specs(
+        cls: type[CHun],
+        target: TargetSpec,
+        transport: Any,
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    assert entry.fmt.set_offset(6, source="unit-test") == "stored"
+    assert calls == [{"offset": 6, "overwrite": True, "source": "unit-test"}]
 
 
 def test_script_fmt_facade_enables_compare_write_loginfo_by_default(
@@ -1440,7 +1486,7 @@ def test_script_recv_leak_reads_hex_and_applies_offset(
 ) -> None:
     session = DummySession(kind="process")
     session.rec = EvidenceRegistry()
-    session.io.recvline_values = [b"0x7f1234580aa0\n"]
+    session.io.recv_values = [b"0x7f1234580aa0\n"]
 
     def fake_from_specs(
         cls: type[CHun], target: TargetSpec, transport: Any
@@ -1465,10 +1511,9 @@ def test_script_recv_leak_reads_hex_and_applies_offset(
     assert observation is not None
     assert observation.value == value
     assert observation.source == "printf"
-    assert session.io.calls == [
-        ("recvuntil", ("puts: ",), {"drop": False}),
-        ("recvline", (), {"keepends": False}),
-    ]
+    assert session.io.calls[0] == ("recvuntil", ("puts: ",), {"drop": False})
+    assert session.io.calls.count(("recv", (1,), {})) == 15
+    assert session.io.calls[-1] == ("unrecv", (b"\n",), {})
 
 
 def test_script_recv_leak_extracts_first_hex_token_from_dirty_line(
@@ -1477,7 +1522,7 @@ def test_script_recv_leak_extracts_first_hex_token_from_dirty_line(
 ) -> None:
     session = DummySession(kind="process")
     session.rec = EvidenceRegistry()
-    session.io.recvline_values = [b"0x7f1234580aa0 saved-rbp=0x7ffe3748e060\n"]
+    session.io.recv_values = [b"0x7f1234580aa0 saved-rbp=0x7ffe3748e060\n"]
 
     def fake_from_specs(
         cls: type[CHun], target: TargetSpec, transport: Any
@@ -1495,13 +1540,10 @@ def test_script_recv_leak_extracts_first_hex_token_from_dirty_line(
     value = entry.recv_leak("puts", delim="puts: ", mode="hex")
 
     assert value == 0x7F1234580AA0
-    assert warnings == [
-        "共匹配到 2 个地址：0x7f1234580aa0,0x7ffe3748e060|默认选 0x7f1234580aa0"
-    ]
-    assert session.io.calls == [
-        ("recvuntil", ("puts: ",), {"drop": False}),
-        ("recvline", (), {"keepends": False}),
-    ]
+    assert warnings == []
+    assert session.io.calls[0] == ("recvuntil", ("puts: ",), {"drop": False})
+    assert session.io.calls.count(("recv", (1,), {})) == 15
+    assert session.io.calls[-1] == ("unrecv", (b" ",), {})
 
 
 def test_script_recv_leak_supports_hex_index_selection(
@@ -1510,7 +1552,7 @@ def test_script_recv_leak_supports_hex_index_selection(
 ) -> None:
     session = DummySession(kind="process")
     session.rec = EvidenceRegistry()
-    session.io.recvline_values = [b"0x7f1234580aa0 0x7ffe3748e060\n"]
+    session.io.recv_values = [b"0x7f1234580aa0 0x7ffe3748e060\n"]
 
     def fake_from_specs(
         cls: type[CHun], target: TargetSpec, transport: Any
@@ -1587,7 +1629,7 @@ def test_script_recv_leak_rejects_out_of_range_hex_index(
 ) -> None:
     session = DummySession(kind="process")
     session.rec = EvidenceRegistry()
-    session.io.recvline_values = [b"0x7f1234580aa0 0x7ffe3748e060\n"]
+    session.io.recv_values = [b"0x7f1234580aa0 0x7ffe3748e060\n"]
 
     def fake_from_specs(
         cls: type[CHun], target: TargetSpec, transport: Any
@@ -1666,6 +1708,261 @@ def test_script_recv_leak_reads_regex_capture_and_allows_custom_domain(
     assert session.io.calls == [
         ("recvregex", (rb"leak=(0x[0-9a-f]+)",), {"capture": True}),
     ]
+
+
+def test_script_recv_leak_supports_regex_without_capture_group(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvregex_match = re.search(rb"0x[0-9a-f]{8}", b"0xdeadbeef\x12")
+    assert session.io.recvregex_match is not None
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("canary", regex=rb"0x[0-9a-f]{8}", mode="hex")
+
+    assert value == 0xDEADBEEF
+    assert session.io.calls == [
+        ("recvregex", (rb"0x[0-9a-f]{8}",), {"capture": True}),
+    ]
+
+
+def test_script_recv_leak_supports_regex_with_full_capture_group(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvregex_match = re.search(rb"(0x[0-9a-f]{8})", b"0xdeadbeef\x12")
+    assert session.io.recvregex_match is not None
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("canary", regex=rb"(0x[0-9a-f]{8})", mode="hex")
+
+    assert value == 0xDEADBEEF
+    assert session.io.calls == [
+        ("recvregex", (rb"(0x[0-9a-f]{8})",), {"capture": True}),
+    ]
+
+
+def test_script_recv_leak_regex_capture_remains_pure_recvregex(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvregex_match = re.search(rb"(0x[0-9a-f]+)", b"0xa")
+    assert session.io.recvregex_match is not None
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("canary", regex=rb"(0x[0-9a-f]+)", mode="hex")
+
+    assert value == 0xA
+    assert session.io.calls == [
+        ("recvregex", (rb"(0x[0-9a-f]+)",), {"capture": True}),
+    ]
+
+
+def test_script_recv_leak_reports_partial_regex_capture_in_hex_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recvregex_match = re.search(rb"0x([0-9a-f])", b"0x5")
+    assert session.io.recvregex_match is not None
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(
+        ValueError,
+        match="regex 已命中，但其整体匹配或第一个捕获组未产出完整的 0x... 十六进制地址",
+    ):
+        entry.recv_leak("canary", regex=rb"0x([0-9a-f])", mode="hex")
+
+
+def test_script_recv_leak_rejects_regex_index_without_recv_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+
+    with pytest.raises(
+        ValueError,
+        match="recv=False 且提供 regex 时，index 仅支持 0；如需多命中选择，请设置 recv=True。",
+    ):
+        entry.recv_leak("canary", regex=rb"0x[0-9a-f]{8}", mode="hex", index=1)
+
+
+def test_script_recv_leak_supports_regex_with_explicit_recv_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recv_values = [b"canary => 0xdeadbeef\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak(
+        "canary",
+        regex=rb"(0x[0-9a-f]+)",
+        mode="hex",
+        recv=True,
+    )
+
+    assert value == 0xDEADBEEF
+    assert session.io.calls[0] == ("recv", (4096,), {})
+    assert ("clean", (), {"timeout": 0}) in session.io.calls
+
+
+def test_script_recv_leak_supports_regex_recv_mode_with_hex_index_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recv_values = [b"0x11111111.0x22222222.0x33333333\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    warnings: list[str] = []
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak(
+        "canary",
+        regex=rb"0x[0-9a-f]{8}",
+        mode="hex",
+        recv=True,
+        index=1,
+    )
+
+    assert value == 0x22222222
+    assert warnings == [
+        "共匹配到 3 个地址：0x11111111,0x22222222,0x33333333|默认选 0x22222222"
+    ]
+    assert session.io.calls[0] == ("recv", (4096,), {})
+    assert ("clean", (), {"timeout": 0}) in session.io.calls
+
+
+def test_script_recv_leak_recv_mode_collects_split_burst_and_honors_index(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recv_values = [b"0xffc177d8", b".0x5d8e4d00.0x804a010\x05$"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    warnings: list[str] = []
+    monkeypatch.setattr(script_mod.log, "warning", warnings.append)
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("canary", mode="hex", recv=True, index=1)
+
+    assert value == 0x5D8E4D00
+    assert warnings == [
+        "共匹配到 3 个地址：0xffc177d8,0x5d8e4d00,0x804a010|默认选 0x5d8e4d00"
+    ]
+    assert session.io.calls.count(("recv", (4096,), {})) == 2
+    assert ("clean", (), {"timeout": 0}) in session.io.calls
+
+
+def test_script_recv_leak_streams_split_hex_without_regex(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recv_values = [b"0xae793900\x82\x04\x08 $"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("canary", mode="hex")
+
+    assert value == 0xAE793900
+    assert session.io.calls.count(("recv", (1,), {})) == 11
+    assert session.io.calls[-1] == ("unrecv", (b"\x82",), {})
 
 
 def test_script_recv_leak_supports_direct_stream_read_without_delim_or_regex(

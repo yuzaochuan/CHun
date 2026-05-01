@@ -231,3 +231,6 @@ data/libc/*.db-wal
 # 91个核心libc偏移数据库，文件大小40kb 
 !data/libc/libc.db
 !data/libc/raw/CATALOG_MAINTENANCE.md
+
+目前项目所有资产和功能接口.md
+CHun_runtime_first_v0.2-v0.4_roadmap.md

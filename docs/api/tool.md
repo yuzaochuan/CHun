@@ -144,8 +144,13 @@ t.gdb("b *main\nc")
 - `t.recv_leak(...)` 的返回值就是解析后的整数泄漏；脚本态优先直接使用返回值，而不是再手动 `get_observation(...).value`
 - `t.recv_leak(name)` 支持没有明显前缀的场景：若不传 `delim` / `regex`，会直接按当前 `mode` 从流中读取泄漏值
 - `t.recv_leak(..., mode="raw")` 默认按常见 CTF 泄漏习惯读取 32 位 `4` 字节、64 位 `6` 字节，再按 `t.elf.bytes` 补零解析
-- `t.recv_leak(..., mode="hex")` 会从读到的文本里提取全部 `0x...` 地址 token；默认取第一个，可用 `index=` 指定第几个命中
+- `t.recv_leak(..., mode="hex")` 会按流式 `0x...` token 解析十六进制地址；默认取第一个，可用 `index=` 指定第几个命中
 - `t.recv_leak(..., mode="hex", delim=..., delim_end=...)` 可限定提取窗口到两个分隔符之间；若命中多个地址会 `warning` 输出完整列表和默认选中的地址
+- `t.recv_leak(..., regex=..., recv=False)` 继续走底层 `recvregex(...)` 流式语义；此时 `index` 仅支持 `0`
+- `t.recv_leak(..., regex=..., recv=True)` 会先主动抓取当前 burst，再对完整 payload 做 Python `re.finditer(...)`；这一路径不再依赖 `recvregex(...)`，更接近 `re.search/finditer` 的手感
+- `t.recv_leak(..., regex=..., mode="hex", recv=True)` 会对 full-buffer regex 的全部命中做 `0x...` 地址提取，并支持 `index=` 选择第几个命中
+- `t.recv_leak(..., recv=True)` 会显式走“抓当前 burst 再解析”的路径；适合无换行、分片输出或想主动抓一块输出的场景，但仍可能吞掉后续 prompt，默认关闭
+- `t.recv_leak(..., mode="hex", regex=...)` 要求 regex 的整体匹配或第一个捕获组能产出完整 `0x...` 地址；例如 `rb"0x[0-9a-f]{8}"`、`rb"(0x[0-9a-f]{8})"` 是合法写法，而 `rb"0x([0-9a-f])"` 这类只返回局部子串的模式会抛定向错误
 - `t.gadget["rdi"]` 语义为 `pop rdi; ret`；`t.gadget["rsi_r15"]` 语义为 `pop rsi; pop r15; ret`
 - `t.gadget["ret"]` 语义为 `ret`，`t.gadget["leave"]` 语义为 `leave; ret`
 - `t.gadget["libc:rdi"]` 表示从 libc 镜像查找对应 gadget；不带前缀时默认查 ELF 镜像
