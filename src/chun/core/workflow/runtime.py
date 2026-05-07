@@ -164,7 +164,7 @@ class WorkflowScriptFacade:
             return match.encode()
         if hasattr(match, "group"):
             groups = match.groups()  # type: ignore[attr-defined]
-            group = groups[0] if groups else match.group(1)  # type: ignore[attr-defined]
+            group = groups[0] if groups else match.group(0)  # type: ignore[attr-defined]
             if isinstance(group, bytes):
                 return group
             if isinstance(group, str):
@@ -177,6 +177,114 @@ class WorkflowScriptFacade:
             if isinstance(group, str):
                 return group.encode()
         raise ValueError("recvregex(capture=True) 未返回可用的捕获组。")
+
+    @staticmethod
+    def _search_regex_capture(payload: bytes, regex: bytes | str) -> bytes:
+        if isinstance(regex, bytes):
+            match = re.search(regex, payload)
+        else:
+            match = re.search(regex, payload.decode("latin-1"))
+        if match is None:
+            raise ValueError("主动 recv 后未匹配到 regex 指定的泄漏。")
+        return WorkflowScriptFacade._extract_regex_capture(match)
+
+    @staticmethod
+    def _find_regex_captures(payload: bytes, regex: bytes | str) -> list[bytes]:
+        matches = (
+            list(re.finditer(regex, payload))
+            if isinstance(regex, bytes)
+            else list(re.finditer(regex, payload.decode("latin-1")))
+        )
+        if not matches:
+            raise ValueError("主动 recv 后未匹配到 regex 指定的泄漏。")
+        return [WorkflowScriptFacade._extract_regex_capture(match) for match in matches]
+
+    def _drain_recv_buffer(self) -> bytes:
+        cleaner = getattr(self.io, "clean", None)
+        if not callable(cleaner):
+            return b""
+        try:
+            drained = cleaner(timeout=0)
+        except TypeError:
+            drained = cleaner()
+        if isinstance(drained, bytes):
+            return drained
+        if isinstance(drained, str):
+            return drained.encode()
+        return b""
+
+    def _unrecv(self, data: bytes) -> None:
+        if not data:
+            return
+        unread = getattr(self.io, "unrecv", None)
+        if callable(unread):
+            unread(data)
+
+    def _buffer_has_pending_data(self, *, timeout: float = 0) -> bool:
+        checker = getattr(self.io, "can_recv", None)
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker(timeout=timeout))
+        except TypeError:
+            return bool(checker())
+
+    def _recv_current_burst(self, *, chunk_size: int = 4096, idle_timeout: float = 0.05) -> bytes:
+        payload = self.recv(chunk_size)
+        if not payload:
+            return payload
+        chunks = [payload]
+        while self._buffer_has_pending_data(timeout=idle_timeout):
+            chunk = self.recv(chunk_size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks) + self._drain_recv_buffer()
+
+    def _recv_hex_tokens(self, *, index: int) -> bytes:
+        tokens: list[bytes] = []
+        current = bytearray()
+        started = False
+        saw_prefix = False
+
+        while len(tokens) <= index:
+            chunk = self.recv(1)
+            if not chunk:
+                if current:
+                    tokens.append(bytes(current))
+                break
+            for offset, byte in enumerate(chunk):
+                ch = bytes((byte,))
+                if not started:
+                    if not saw_prefix:
+                        saw_prefix = ch == b"0"
+                        continue
+                    if ch in {b"x", b"X"}:
+                        current = bytearray(b"0x")
+                        started = True
+                        saw_prefix = False
+                        continue
+                    saw_prefix = ch == b"0"
+                    continue
+
+                if ch in b"0123456789abcdefABCDEF":
+                    current.extend(ch)
+                    if not self._buffer_has_pending_data():
+                        tokens.append(bytes(current))
+                        return b" ".join(tokens)
+                    continue
+
+                tokens.append(bytes(current))
+                current.clear()
+                started = False
+                saw_prefix = ch == b"0"
+                if len(tokens) > index:
+                    remaining = chunk[offset:]
+                    self._unrecv(remaining)
+                    return b" ".join(tokens)
+                break
+
+        return b" ".join(tokens)
 
     def recv_leak(
         self,
@@ -191,6 +299,7 @@ class WorkflowScriptFacade:
         mode: str = "raw",
         index: int = 0,
         size: int | None = None,
+        recv: bool = False,
         strip_newline: bool = True,
     ) -> int:
         if delim is not None and regex is not None:
@@ -201,32 +310,43 @@ class WorkflowScriptFacade:
             raise ValueError("mode 必须是 'raw' 或 'hex'。")
         if mode == "raw" and delim_end is not None:
             raise ValueError("mode='raw' 时不支持 delim_end。")
+        if regex is not None and not recv and index != 0:
+            raise ValueError("recv=False 且提供 regex 时，index 仅支持 0；如需多命中选择，请设置 recv=True。")
 
         resolved_domain = domain or RecordDomain.LIBC
-        if regex is not None:
-            compiled = self._coerce_delim_or_regex(regex, field_name="regex")
-            matched = self.recvregex(compiled, capture=True)
-            payload = self._extract_regex_capture(matched)
+        if delim is not None:
+            resolved_delim = self._coerce_delim_or_regex(delim, field_name="delim")
+            self.recvuntil(resolved_delim)
+        if mode == "raw":
+            bits = int(getattr(self.elf, "bits", 64)) if self.elf is not None else 64
+            default_size = 4 if bits <= 32 else 6
+            payload = self.recv(size or default_size)
+            if strip_newline:
+                payload = payload.rstrip(b"\r\n")
         else:
-            if delim is not None:
-                resolved_delim = self._coerce_delim_or_regex(delim, field_name="delim")
-                self.recvuntil(resolved_delim)
-            if mode == "raw":
-                bits = int(getattr(self.elf, "bits", 64)) if self.elf is not None else 64
-                default_size = 4 if bits <= 32 else 6
-                payload = self.recv(size or default_size)
+            compiled = (
+                self._coerce_delim_or_regex(regex, field_name="regex")
+                if regex is not None
+                else None
+            )
+            used_regex = compiled is not None
+            if delim_end is not None:
+                payload = self.recvuntil(
+                    self._coerce_delim_or_regex(delim_end, field_name="delim_end"),
+                    drop=True,
+                )
+            elif compiled is not None and not recv:
+                matched = self.recvregex(compiled, capture=True)
+                payload = self._extract_regex_capture(matched)
+            elif recv:
+                payload = self._recv_current_burst()
                 if strip_newline:
-                    payload = payload.rstrip(b"\r\n")
+                    payload = payload.strip()
+                if compiled is not None:
+                    captures = self._find_regex_captures(payload, compiled)
+                    payload = b" ".join(captures) if mode == "hex" else captures[index]
             else:
-                if delim_end is not None:
-                    payload = self.recvuntil(
-                        self._coerce_delim_or_regex(delim_end, field_name="delim_end"),
-                        drop=True,
-                    )
-                else:
-                    payload = self.recvline(keepends=not strip_newline)
-                    if strip_newline:
-                        payload = payload.strip()
+                payload = self._recv_hex_tokens(index=index)
 
         if mode == "raw":
             pointer_width = int(getattr(self.elf, "bytes", 8)) if self.elf is not None else 8
@@ -237,7 +357,15 @@ class WorkflowScriptFacade:
         else:
             matches = _HEX_POINTER_RE.findall(payload)
             if not matches:
-                raise ValueError("未读取到可解析的十六进制泄漏。")
+                if used_regex:
+                    raise ValueError(
+                        "regex 已命中，但其整体匹配或第一个捕获组未产出完整的 0x... 十六进制地址；"
+                        "请让 regex 整体匹配完整地址，或让第一个捕获组返回完整地址。"
+                    )
+                raise ValueError(
+                    "未读取到可解析的十六进制泄漏。mode='hex' 默认按流式 0x token 解析；"
+                    "若需要自定义边界，请显式传 delim_end=... / regex=...，或设置 recv=True。"
+                )
             if not (-len(matches) <= index < len(matches)):
                 tokens = ",".join(token.decode() for token in matches)
                 raise ValueError(

@@ -13,6 +13,7 @@ from ..core.models import (
     FmtExecutionResult,
     FmtLayoutPolicy,
     FmtOffsetProbeMode,
+    FmtOffset,
     FmtOffsetProbeResult,
     FmtRenderStep,
     FmtResultKind,
@@ -299,6 +300,16 @@ class _ScriptFmtFacade:
         if source != "fmt.probe":
             kwargs["source"] = source
         return self._service.find_offset(**kwargs)
+
+    def set_offset(
+        self,
+        offset: int | FmtOffset | FmtOffsetProbeResult,
+        *,
+        overwrite: bool = True,
+        source: str = "fmt.service",
+    ) -> FmtOffset:
+        """显式暴露 set_offset，便于 IDE 补全与手写 exp。"""
+        return self._service.set_offset(offset, overwrite=overwrite, source=source)
 
     def write(
         self,
@@ -714,4 +725,3 @@ def _pad_time_for_max_padding(max_pad: int) -> str:
     if max_pad < 0x10000:
         return "HIGH"
     return "EXTREME"
-

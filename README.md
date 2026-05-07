@@ -8,6 +8,8 @@ CHun 当前已进入第三轮收口阶段：在前两轮的 transport + registry
 
 - 会话入口：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()`
 - 脚本模式入口：`CHun.script()`，保留人工写 exp 时的快速切换手感
+- 脚本态 leak 语法糖：`recv_leak()`，支持 `raw` / `hex` / `regex` / `recv=True`
+- fmt 偏移管理：`session.fmt.set_offset(...)` 与脚本态 `t.fmt.set_offset(...)`
 - Web 方向 transport：`CHun.http()` / `CHun.websocket()`
 - Blind transport：`CHun.blind()` + `BlindReconnectTransport`
 - 会话内统一事实层：`session.registry` / `session.rec`
@@ -19,7 +21,8 @@ CHun 当前已进入第三轮收口阶段：在前两轮的 transport + registry
 - 顶层工厂：`CHun.process()` / `CHun.remote()` / `CHun.ssh_process()` / `CHun.http()` / `CHun.websocket()` / `CHun.blind()`
 - 脚本 facade：`CHun.script()`
 - 会话入口：`session.io` / `session.registry` / `session.rec` / `session.infer`
-- # 调试与解析：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
+- 调试与解析：`session.dbg` / `session.gdb_mi` / `session.resolve` / `session.crash`
+- 脚本态高频语法糖：`recv_leak()` / `replay()` / `fmt.find_offset()` / `fmt.set_offset()`
 - Web 方向 transport：`CHun.http()` / `CHun.websocket()`
 - Blind transport：`CHun.blind()` + `BlindReconnectTransport`
 - 第一阶段主力 transport：`PwntoolsTubeTransport` / `HttpxTransport` / `WebSocketTransport`
@@ -71,6 +74,9 @@ print(ws.io.recv_message())
 - `t.rec` / `t.resolve` / `t.dbg` 等 session 核心能力会作为显式 facade 暴露
 - `t.sla()` / `t.rl()` / `t.ia()` 等高频 tube 方法和 alias 可直接调用
 - 低频 tube 方法仍可通过 fallback 使用，例如 `t.clean()`
+- `t.recv_leak(..., mode="hex")` 默认按流式 `0x...` token 解析，可配合 `index=` 选第几个地址
+- `t.recv_leak(..., regex=..., recv=True)` 会先主动抓取当前 burst，再对完整缓冲做 Python `re.finditer(...)`；适合分片输出、无换行地址、或希望获得更接近 `re` 的手感
+- `t.fmt.set_offset(...)` 在脚本态已显式暴露，IDE 可直接补全
 
 ```python
 from chun import CHun
@@ -85,8 +91,27 @@ c
 """)
 
 t.sla(b"menu> ", b"1")
-t.rec.record_symbol_leak("puts", 0x7F1234580000, source="got")
+puts = t.recv_leak("puts", delim=b"puts: ", mode="hex")
+t.resolve.libc_base_from_elf_symbol("puts", symbol="puts")
+print(hex(puts), hex(t.libc_base))
+
+t.fmt.set_offset(6, source="manual")
+canary = t.recv_leak(
+    "canary",
+    regex=rb"0x[0-9a-f]{8}",
+    mode="hex",
+    recv=True,
+    index=1,
+)
+print(hex(canary))
 ```
+
+`recv_leak()` 当前推荐心智模型：
+
+- 默认 `mode="raw"`，适合固定字节数原始泄漏
+- `mode="hex"` 适合 `%p` / 文本地址泄漏，默认按流式 `0x...` token 解析
+- `regex=..., recv=False` 继续走底层 `recvregex(...)` 的流式语义
+- `regex=..., recv=True` 改走“抓当前 burst + full-buffer regex”语义；若再配合 `mode="hex"`，则支持 `index=` 选中第几个 regex 命中地址
 
 命令行切换方式：
 
