@@ -5,6 +5,8 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
+from .facade import CHun
+
 _TRANSPORT_EXPORTS = {
     "BlindReconnectTransport",
     "HttpxTransport",

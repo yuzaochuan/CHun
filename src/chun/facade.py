@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Callable, Sequence
 if TYPE_CHECKING:
     from .core.models import TargetSpec, TransportSpec
     from .core.session import CHunSession
-    from .script import ScriptEntry
+    from .script.entry import ScriptEntry
 
 DEFAULT_TERMINAL: tuple[str, ...] = ("tmux", "splitw", "-h")
 
