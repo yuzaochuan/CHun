@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Sequence
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_MAX_GADGET_SUGGESTIONS = 5
 
 
 def _script_module() -> Any:
@@ -19,6 +20,13 @@ class _ParsedGadgetToken:
     source: Literal["elf", "libc"]
     token: str
     instructions: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True)
+class _CompatibleGadgetCandidate:
+    address: int
+    instructions: tuple[str, ...]
+    extra_pops: int
 
 
 class _ScriptGadgetFacade:
@@ -152,8 +160,117 @@ class _ScriptGadgetFacade:
                 value=None,
                 address_mode=self._address_mode(source=parsed.source, image=image),
             )
-            raise LookupError(f"未找到 gadget: {joined}")
+            suggestions = self._find_compatible_gadgets(
+                parsed=parsed,
+                image=image,
+                rop=rop,
+                limit=_MAX_GADGET_SUGGESTIONS,
+            )
+            raise LookupError(self._format_not_found_message(joined, suggestions))
         return gadget
+
+    def _find_compatible_gadgets(
+        self,
+        *,
+        parsed: _ParsedGadgetToken,
+        image: object,
+        rop: object,
+        limit: int,
+    ) -> tuple[_CompatibleGadgetCandidate, ...]:
+        required = parsed.instructions[:-1]
+        if not required or parsed.instructions[-1] != "ret":
+            return ()
+        if not all(instruction.startswith("pop ") for instruction in required):
+            return ()
+
+        candidates: list[_CompatibleGadgetCandidate] = []
+        for gadget in self._iter_rop_gadgets(rop):
+            instructions = self._gadget_instructions(gadget)
+            if not self._is_compatible_pop_ret_gadget(instructions, required=required):
+                continue
+            address = self._gadget_address(gadget)
+            if address is None:
+                continue
+            if instructions == parsed.instructions:
+                continue
+            extra_pops = len(instructions) - len(required) - 1
+            display_address = self._resolve_runtime_address(
+                source=parsed.source,
+                image=image,
+                gadget_address=address,
+            )
+            candidates.append(
+                _CompatibleGadgetCandidate(
+                    address=display_address,
+                    instructions=instructions,
+                    extra_pops=extra_pops,
+                )
+            )
+
+        candidates.sort(key=lambda item: (item.extra_pops, len(item.instructions), item.address))
+        return tuple(candidates[:limit])
+
+    @staticmethod
+    def _iter_rop_gadgets(rop: object) -> tuple[object, ...]:
+        gadgets = getattr(rop, "gadgets", None)
+        if isinstance(gadgets, dict):
+            return tuple(gadgets.values())
+        if isinstance(gadgets, (list, tuple)):
+            return tuple(gadgets)
+        return ()
+
+    @staticmethod
+    def _gadget_instructions(gadget: object) -> tuple[str, ...]:
+        raw = getattr(gadget, "insns", None)
+        if raw is None:
+            raw = getattr(gadget, "instructions", None)
+        if not isinstance(raw, (list, tuple)):
+            return ()
+        instructions: list[str] = []
+        for instruction in raw:
+            if isinstance(instruction, bytes):
+                text = instruction.decode("latin-1", errors="ignore")
+            else:
+                text = str(instruction)
+            normalized = " ".join(text.strip().lower().split())
+            if normalized:
+                instructions.append(normalized)
+        return tuple(instructions)
+
+    @staticmethod
+    def _gadget_address(gadget: object) -> int | None:
+        address = getattr(gadget, "address", None)
+        if isinstance(address, int):
+            return int(address)
+        return None
+
+    @staticmethod
+    def _is_compatible_pop_ret_gadget(
+        instructions: tuple[str, ...],
+        *,
+        required: tuple[str, ...],
+    ) -> bool:
+        if len(instructions) <= len(required):
+            return False
+        if instructions[-1] != "ret":
+            return False
+        if instructions[: len(required)] != required:
+            return False
+        extra = instructions[len(required) : -1]
+        return bool(extra) and all(instruction.startswith("pop ") for instruction in extra)
+
+    @staticmethod
+    def _format_not_found_message(
+        joined: str,
+        suggestions: Sequence[_CompatibleGadgetCandidate],
+    ) -> str:
+        if not suggestions:
+            return f"未找到 gadget: {joined}"
+        lines = [f"未找到 gadget: {joined}", "其他可利用的 gadget:"]
+        for candidate in suggestions:
+            rendered = "; ".join(candidate.instructions)
+            lines.append(f"  [extra={candidate.extra_pops}] {candidate.address:#x}: {rendered}")
+        return "\n".join(lines)
 
     def _resolve_runtime_address(
         self,

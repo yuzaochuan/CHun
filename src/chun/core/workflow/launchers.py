@@ -10,6 +10,8 @@ from ... import _compat
 from ...facade import CHun, DEFAULT_TERMINAL
 from ..session import CHunSession
 
+ELF = _compat.ELF
+
 
 class WorkflowLauncher(Protocol):
     """负责“怎么拿到 session”。"""
@@ -61,7 +63,7 @@ class ProcessLauncher:
         if not resolved.exists():
             return None
         try:
-            return _compat.ELF(str(resolved), checksec=False)
+            return ELF(str(resolved), checksec=False)
         except Exception as exc:
             _compat.log.warning(f"workflow launcher 无法加载 ELF: {resolved} ({exc})")
             return None

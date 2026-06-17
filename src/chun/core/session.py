@@ -210,6 +210,10 @@ class CHunSession:
             self._dbg = controller
         return controller
 
+    @dbg.setter
+    def dbg(self, controller: "PwntoolsGdbBridge | None") -> None:
+        self._dbg = controller
+
     @property
     def gdb_mi(self) -> "GdbMiBridge":
         bridge = self._gdb_mi
@@ -219,6 +223,10 @@ class CHunSession:
             bridge = GdbMiBridge(self.registry, self.target)
             self._gdb_mi = bridge
         return bridge
+
+    @gdb_mi.setter
+    def gdb_mi(self, bridge: "GdbMiBridge | None") -> None:
+        self._gdb_mi = bridge
 
     @property
     def fmt(self) -> "FmtService":
@@ -230,6 +238,10 @@ class CHunSession:
             self._fmt = service
         return service
 
+    @fmt.setter
+    def fmt(self, service: "FmtService | None") -> None:
+        self._fmt = service
+
     @property
     def crash(self) -> "CorefileAnalyzer":
         analyzer = self._crash
@@ -239,6 +251,10 @@ class CHunSession:
             analyzer = CorefileAnalyzer(self.registry)
             self._crash = analyzer
         return analyzer
+
+    @crash.setter
+    def crash(self, analyzer: "CorefileAnalyzer | None") -> None:
+        self._crash = analyzer
 
     @property
     def io(self) -> BaseTransport:

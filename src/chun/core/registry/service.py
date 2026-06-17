@@ -55,6 +55,7 @@ _EMIT_VALUES = {"debug", "info", "warning"}
 _ARTIFACT_MODE_VALUES = {"summary", "repr", "skip"}
 _REPLAY_PAYLOAD_MODE_VALUES = {"repr", "hex"}
 _LOG = logging.getLogger("chun")
+log = _LOG
 
 
 class EvidenceRegistry:
@@ -611,10 +612,10 @@ class EvidenceRegistry:
     @staticmethod
     def _resolve_emitter(level: RegistryEmit) -> Callable[[str], None]:
         if level == "debug":
-            return _LOG.debug
+            return log.debug
         if level == "warning":
-            return _LOG.warning
-        return _LOG.info
+            return log.warning
+        return log.info
 
     def show(
         self,

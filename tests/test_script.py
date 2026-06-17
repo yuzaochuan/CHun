@@ -99,7 +99,8 @@ class DummyIO:
         self.calls.append(("interactive", (), {}))
 
     def clean(self, timeout: float | None = None) -> bytes:
-        self.calls.append(("clean", (), {"timeout": timeout}))
+        kwargs = {} if timeout is None else {"timeout": timeout}
+        self.calls.append(("clean", (), kwargs))
         if self.clean_values:
             return self.clean_values.pop(0)
         return b"clean"
@@ -1217,6 +1218,7 @@ def test_script_explicit_io_methods_and_aliases_forward_to_io(
 
     entry = CHun.script("./challenge")
     entry.start()
+    session.io.recv_values = [b"recv"]
 
     entry.send(b"A")
     entry.sendline(b"B")
@@ -1367,6 +1369,7 @@ def test_script_replay_sugar_supports_callable_with_multi_args_and_kwargs(
     session = DummySession(kind="process")
     replay_session = DummySession(kind="process")
     replay_session.rec = EvidenceRegistry()
+    replay_session.io.recv_values = [b"recv"]
     registry = EvidenceRegistry()
     registry.append_event("sendline", payload=b"warmup\n")
     session.rec = registry
@@ -2577,3 +2580,51 @@ def test_script_gadget_not_found_is_cached(
     monkeypatch.setattr(script_mod, "ROP", BombROP)
     with pytest.raises(LookupError):
         _ = entry.gadget["ret"]
+
+
+def test_script_gadget_not_found_suggests_compatible_pop_ret_gadgets(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+    tmp_path,
+) -> None:
+    session = DummySession(kind="process")
+
+    class FakeGadget:
+        def __init__(self, address: int, insns: list[str]) -> None:
+            self.address = address
+            self.insns = insns
+
+    class MissROP:
+        def __init__(self, _image: object) -> None:
+            self.gadgets = {
+                0x401200: FakeGadget(0x401200, ["pop rbp", "pop r14", "pop r15", "ret"]),
+                0x401100: FakeGadget(0x401100, ["pop rbp", "pop r14", "pop r12", "pop r13", "ret"]),
+                0x401000: FakeGadget(0x401000, ["pop rsi", "ret"]),
+                0x401300: FakeGadget(0x401300, ["pop rbp", "leave", "ret"]),
+            }
+
+        def find_gadget(self, _items: list[str]) -> object | None:
+            return None
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(script_mod, "ROP", MissROP)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge", cache_dir=str(tmp_path / "cache")).start()
+    with pytest.raises(LookupError) as error:
+        _ = entry.gadget["rbp_r14"]
+
+    message = str(error.value)
+    assert "未找到 gadget: pop rbp; pop r14; ret" in message
+    assert "其他可利用的 gadget:" in message
+    assert "[extra=1] 0x401200: pop rbp; pop r14; pop r15; ret" in message
+    assert "[extra=2] 0x401100: pop rbp; pop r14; pop r12; pop r13; ret" in message
+    assert message.index("[extra=1]") < message.index("[extra=2]")
+    assert "pop rsi; ret" not in message
+    assert "pop rbp; leave; ret" not in message
