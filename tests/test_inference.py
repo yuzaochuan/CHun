@@ -115,6 +115,54 @@ def test_libc_base_inference_accepts_symbol_offset_as_second_argument() -> None:
     assert registry.require_int_fact("libc.base") == expected_base
 
 
+def test_libc_base_inference_warns_when_raw_base_is_not_page_aligned(
+    monkeypatch,
+) -> None:
+    registry = EvidenceRegistry()
+    leak = 0x7F123456789A
+    atoi_offset = 0x03A950
+    raw_base = leak - atoi_offset
+    warnings: list[str] = []
+    registry.record_symbol_leak(
+        "atoi@got",
+        leak,
+        domain=RecordDomain.LIBC,
+        source="got",
+    )
+    monkeypatch.setattr(inference_service_mod.log, "warning", warnings.append)
+
+    infer = InferenceService(registry)
+    result = infer.libc_base_from_symbol_leak("atoi@got", atoi_offset)
+
+    assert result.raw_base == raw_base
+    assert warnings == [
+        f"计算 libc 为：{hex(raw_base)}，可能不是正确的 libc。"
+        f"（{hex(leak)} - {hex(atoi_offset)} = {hex(raw_base)}）"
+    ]
+
+
+def test_libc_base_inference_does_not_warn_when_raw_base_is_page_aligned(
+    monkeypatch,
+) -> None:
+    registry = EvidenceRegistry()
+    expected_base = 0x7F1234500000
+    puts_offset = 0x080000
+    warnings: list[str] = []
+    registry.record_symbol_leak(
+        "puts",
+        expected_base + puts_offset,
+        domain=RecordDomain.LIBC,
+        source="got",
+    )
+    monkeypatch.setattr(inference_service_mod.log, "warning", warnings.append)
+
+    infer = InferenceService(registry)
+    result = infer.libc_base_from_symbol_leak("puts", puts_offset)
+
+    assert result.raw_base == expected_base
+    assert warnings == []
+
+
 def test_libc_candidates_from_leaks_requires_catalog_dependency() -> None:
     registry = EvidenceRegistry()
     infer = InferenceService(registry)

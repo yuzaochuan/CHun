@@ -59,6 +59,11 @@ class InferenceService:
 
         raw_base = observation.value - symbol_offset
         aligned_base = raw_base - (raw_base % self.page_size)
+        if domain == RecordDomain.LIBC and raw_base & 0xFFF:
+            log.warning(
+                f"计算 libc 为：{hex(raw_base)}，可能不是正确的 libc。"
+                f"（{hex(observation.value)} - {hex(symbol_offset)} = {hex(raw_base)}）"
+            )
 
         stored_fact = self.registry.record_fact(
             fact_name,

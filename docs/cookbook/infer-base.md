@@ -34,7 +34,7 @@ print(session.registry.get_fact("libc.base"))
 - `symbol_offset`：该符号在目标 libc 文件里的偏移，通常来自 `session.libc_elf.sym["puts"]` 或脚本态 `s.libc.sym["puts"]`
 - `fact_name`：写回的 fact 名称，默认写入 `libc.base`
 
-它会读取 `leak_name` 对应的泄漏地址，计算 `leak - symbol_offset`，页对齐后写回 `libc.base`，并返回包含 `raw_base`、`aligned_base`、`stored_fact` 的结果对象。
+它会读取 `leak_name` 对应的泄漏地址，计算 `leak - symbol_offset`，页对齐后写回 `libc.base`，并返回包含 `raw_base`、`aligned_base`、`stored_fact` 的结果对象。若 `raw_base` 低 12 位非 0，会通过 `log.warning(...)` 提醒该 libc base 可能不正确，并输出完整算式，例如 `计算 libc 为：0x...，可能不是正确的 libc。（0xleak - 0xoffset = 0xraw_base）`。
 
 如果只想直接读取事实层，可以改用：
 
