@@ -239,7 +239,7 @@ def test_workflow_executor_replays_dynamic_ret2libc_flow() -> None:
                 payload=AnalysisNode(
                     callee="s.infer.libc_base_from_symbol_leak",
                     metadata={
-                        "source_text": 's.infer.libc_base_from_symbol_leak("puts", symbol_offset=s.libc.sym["puts"])'
+                        "source_text": 's.infer.libc_base_from_symbol_leak("puts", s.libc.sym["puts"])'
                     },
                 ),
             ),

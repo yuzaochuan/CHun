@@ -89,8 +89,8 @@ class InferenceService:
     def libc_base_from_symbol_leak(
         self,
         observation_name: str,
-        *,
         symbol_offset: int,
+        *,
         fact_name: str = "libc.base",
     ) -> BaseInferenceResult:
         return self._infer_base_from_symbol_leak(

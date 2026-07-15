@@ -20,13 +20,21 @@ session.rec.record_symbol_leak(
     domain=RecordDomain.LIBC,
     source="got",
 )
-result = session.infer.libc_base_from_symbol_leak("puts", symbol_offset=puts_offset)
+result = session.infer.libc_base_from_symbol_leak("puts", puts_offset)
 
 print(hex(result.raw_base))
 print(hex(result.aligned_base))
 print(hex(result.value))
 print(session.registry.get_fact("libc.base"))
 ```
+
+`libc_base_from_symbol_leak(leak_name, symbol_offset, *, fact_name="libc.base")` 的参数含义：
+
+- `leak_name`：已经记录到 registry 的 libc 泄漏 observation 名称，例如 `puts`、`atoi@got`
+- `symbol_offset`：该符号在目标 libc 文件里的偏移，通常来自 `session.libc_elf.sym["puts"]` 或脚本态 `s.libc.sym["puts"]`
+- `fact_name`：写回的 fact 名称，默认写入 `libc.base`
+
+它会读取 `leak_name` 对应的泄漏地址，计算 `leak - symbol_offset`，页对齐后写回 `libc.base`，并返回包含 `raw_base`、`aligned_base`、`stored_fact` 的结果对象。
 
 如果只想直接读取事实层，可以改用：
 
@@ -38,7 +46,7 @@ print(fact.value if fact else None)
 如果想看这次推导和哪条 observation 关联：
 
 ```python
-result = session.infer.libc_base_from_symbol_leak("puts", symbol_offset=puts_offset)
+result = session.infer.libc_base_from_symbol_leak("puts", puts_offset)
 print(result.observation_name, hex(result.aligned_base))
 ```
 

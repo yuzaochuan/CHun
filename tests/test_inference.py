@@ -85,7 +85,7 @@ def test_libc_base_inference_creates_fact_from_symbol_leak_observation() -> None
     )
 
     infer = InferenceService(registry)
-    result = infer.libc_base_from_symbol_leak("puts", symbol_offset=puts_offset)
+    result = infer.libc_base_from_symbol_leak("puts", puts_offset)
 
     fact = registry.get_fact("libc.base")
     assert fact is not None
@@ -95,6 +95,24 @@ def test_libc_base_inference_creates_fact_from_symbol_leak_observation() -> None
     assert fact.metadata["symbol_offset"] == puts_offset
     assert result.raw_base == expected_base
     assert result.aligned_base == expected_base
+
+
+def test_libc_base_inference_accepts_symbol_offset_as_second_argument() -> None:
+    registry = EvidenceRegistry()
+    expected_base = 0x7F1234500000
+    atoi_offset = 0x03A950
+    registry.record_symbol_leak(
+        "atoi@got",
+        expected_base + atoi_offset,
+        domain=RecordDomain.LIBC,
+        source="got",
+    )
+
+    infer = InferenceService(registry)
+    result = infer.libc_base_from_symbol_leak("atoi@got", atoi_offset)
+
+    assert result.aligned_base == expected_base
+    assert registry.require_int_fact("libc.base") == expected_base
 
 
 def test_libc_candidates_from_leaks_requires_catalog_dependency() -> None:

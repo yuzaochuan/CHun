@@ -223,7 +223,7 @@ class ResolveService:
         symbol_offset = int(candidate.sym[symbol])
         return self.infer.libc_base_from_symbol_leak(
             observation_name,
-            symbol_offset=symbol_offset,
+            symbol_offset,
             fact_name=fact_name,
         )
 

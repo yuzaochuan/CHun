@@ -294,6 +294,8 @@ ts          2026-04-22T12:34:56+00:00
 2. 按给定 `symbol_offset` 推导 base
 3. 把结果写回 fact，例如 `libc.base`
 
+函数签名为 `libc_base_from_symbol_leak(leak_name, symbol_offset, *, fact_name="libc.base")`。`symbol_offset` 是必需参数，表示该泄漏符号在 libc 文件中的静态偏移；典型脚本写法是 `s.infer.libc_base_from_symbol_leak("atoi@got", s.libc.sym["atoi"])`。
+
 这证明新的 registry 不是纯存储壳，而是能承接 session + inference 的最小工作流闭环。
 
 `session.infer.libc_candidates_from_leaks()` 在注入 `libc_catalog` 后还会：

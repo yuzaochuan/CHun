@@ -19,7 +19,7 @@ from chun import CHun, RecordDomain
 
 p = CHun.process("./challenge")
 p.rec.record_symbol_leak("puts", 0x7F1234580000, domain=RecordDomain.LIBC, source="got")
-result = p.infer.libc_base_from_symbol_leak("puts", symbol_offset=0x80000)
+result = p.infer.libc_base_from_symbol_leak("puts", 0x80000)
 print(hex(result.aligned_base))
 ```
 

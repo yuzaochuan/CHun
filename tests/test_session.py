@@ -203,7 +203,7 @@ def test_session_minimal_inference_loop_writes_fact_back_to_registry() -> None:
         source="got",
         confidence=0.90,
     )
-    result = session.infer.libc_base_from_symbol_leak("puts", symbol_offset=puts_offset)
+    result = session.infer.libc_base_from_symbol_leak("puts", puts_offset)
 
     fact = session.registry.get_fact("libc.base")
     assert fact is not None

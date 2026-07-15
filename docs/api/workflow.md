@@ -263,7 +263,7 @@ WorkflowJsonCodec.dump_transcript(transcript, "./exp.workflow.json")
 
 - `p64(s.resolve.symbol("system"))`
 - `b"a" * 8 + p64(s.resolve.symbol("__free_hook"))`
-- `s.infer.libc_base_from_symbol_leak(..., symbol_offset=s.libc.sym["puts"])`
+- `s.infer.libc_base_from_symbol_leak(..., s.libc.sym["puts"])`
 
 现在都可以延迟到 `workflow run` 时再求值，而不是在 `workflow export` 时就强行冻结。
 
