@@ -26,8 +26,24 @@ if TYPE_CHECKING:
     from .gadget import _ScriptGadgetFacade
 
 
+_DOMAIN_ALIASES: dict[str, RecordDomain] = {
+    item.value: item for item in RecordDomain
+}
+
+
 def _script_module() -> Any:
     return sys.modules[__package__]
+
+
+def _coerce_record_domain(domain: RecordDomain | str | None) -> RecordDomain:
+    if domain is None:
+        return RecordDomain.LIBC
+    if isinstance(domain, RecordDomain):
+        return domain
+    normalized = domain.strip().lower()
+    if normalized in _DOMAIN_ALIASES:
+        return _DOMAIN_ALIASES[normalized]
+    return RecordDomain(normalized)
 
 
 class ScriptEntry(ReplayScriptMixin):
@@ -623,7 +639,7 @@ class ScriptEntry(ReplayScriptMixin):
         *,
         delim_end: bytes | str | None = None,
         regex: bytes | str | None = None,
-        domain: RecordDomain | None = None,
+        domain: RecordDomain | str | None = None,
         offset: int = 0,
         source: str = "leak",
         mode: Literal["raw", "hex"] = "raw",
@@ -645,7 +661,7 @@ class ScriptEntry(ReplayScriptMixin):
         if regex is not None and not recv and index != 0:
             raise ValueError("recv=False 且提供 regex 时，index 仅支持 0；如需多命中选择，请设置 recv=True。")
 
-        resolved_domain = domain or RecordDomain.LIBC
+        resolved_domain = _coerce_record_domain(domain)
         payload: bytes
 
         if delim is not None:

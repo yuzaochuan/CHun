@@ -12,6 +12,7 @@ from chun.core.models import FactKind, RecordDomain
 from chun.core.replay import VerificationResult
 from chun.core.registry import EvidenceRegistry
 from chun.core.models import TargetSpec
+from chun.script.entry import _coerce_record_domain
 from chun.script.gadget import _ScriptGadgetFacade
 import chun.script as script_mod
 
@@ -1711,6 +1712,37 @@ def test_script_recv_leak_reads_regex_capture_and_allows_custom_domain(
     assert session.io.calls == [
         ("recvregex", (rb"leak=(0x[0-9a-f]+)",), {"capture": True}),
     ]
+
+
+def test_script_recv_leak_accepts_string_domain_alias_without_models_import(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pwntools_env: dict[str, Any],
+) -> None:
+    session = DummySession(kind="process")
+    session.rec = EvidenceRegistry()
+    session.io.recv_values = [b"0x401000\n"]
+
+    def fake_from_specs(
+        cls: type[CHun], target: TargetSpec, transport: Any
+    ) -> DummySession:
+        return session
+
+    monkeypatch.setattr(script_mod.args, "REMOTE", False)
+    monkeypatch.setattr(script_mod.args, "GDB", False)
+    monkeypatch.setattr(CHun, "from_specs", classmethod(fake_from_specs))
+
+    entry = CHun.script("./challenge").start()
+    value = entry.recv_leak("main", mode="hex", domain="elf")
+
+    assert value == 0x401000
+    observation = session.rec.get_observation("main")
+    assert observation is not None
+    assert observation.domain == RecordDomain.ELF
+
+
+def test_coerce_record_domain_accepts_string_aliases() -> None:
+    assert _coerce_record_domain("elf") == RecordDomain.ELF
+    assert _coerce_record_domain("LIBC") == RecordDomain.LIBC
 
 
 def test_script_recv_leak_supports_regex_without_capture_group(
